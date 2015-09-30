@@ -1,0 +1,13 @@
+[general]
+enabled=true
+debug=false
+
+[consul]
+id=my_asterisk
+name=asterisk
+host=127.0.0.1
+port=8500
+register_url=/v1/agent/service/register
+deregister_url=/v1/agent/service/deregister
+tags=asterisk
+address_ip=192.168.1.10
