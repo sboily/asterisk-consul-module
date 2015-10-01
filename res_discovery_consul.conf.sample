@@ -5,7 +5,7 @@ debug=false
 [consul]
 id=my_asterisk
 name=asterisk
-host=127.0.0.1
+host=consul
 port=8500
 register_url=/v1/agent/service/register
 deregister_url=/v1/agent/service/deregister
