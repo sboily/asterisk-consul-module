@@ -139,8 +139,9 @@ static struct ast_json *consul_put_json(void) {
 
 	ast_json_array_append(tags, ast_json_string_create(global_config.tags));
 
-	ast_log(LOG_NOTICE, "The json object created: %s\n",
-		ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	if (global_config.debug)
+		ast_log(LOG_NOTICE, "The json object created: %s\n",
+			ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	return ast_json_ref(obj);
 }
@@ -229,6 +230,11 @@ static void load_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_variable *v;
 
+	int enabled, debug;
+
+	enabled = 1;
+	debug = 1;
+
 	if (!(cfg = ast_config_load(config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "res_discovery_consul configuration file '%s' not found\n", config_file);
 		return;
@@ -238,9 +244,13 @@ static void load_config(int reload)
 
 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {
 		if (!strcasecmp(v->name, "enabled")) {
-			global_config.enabled = atoi(v->value);
+			if (ast_true(v->value) == 0)
+				enabled = 0;
+			global_config.enabled = enabled;
 		} else if (!strcasecmp(v->name, "debug")) {
-			global_config.debug = atoi(v->value);
+			if (ast_true(v->value) == 0)
+				debug = 0;
+			global_config.debug = debug;
                 }
         }
 
@@ -272,13 +282,18 @@ static void load_config(int reload)
 }
 
 /*! \brief Function called to load the resource */
-static void load_res(int start)
+static int load_res(int start)
 {
 	CURL *curl;
 	CURLcode rcode;
 
 	curl = curl_easy_init();
 	load_config(0);
+
+	if (global_config.enabled == 0) {
+		ast_log(LOG_NOTICE, "This module is disabled\n");
+		return AST_MODULE_LOAD_DECLINE;
+	}
 
         if (start == 1) {
         	rcode = consul_register(curl);
@@ -290,6 +305,8 @@ static void load_res(int start)
                 ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
  
 	curl_easy_cleanup(curl);
+
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 
@@ -319,8 +336,10 @@ static int unload_module(void)
  */
 static int load_module(void)
 {
-	load_res(1);
-	return AST_MODULE_LOAD_SUCCESS;
+	if (load_res(1) == AST_MODULE_LOAD_SUCCESS)
+		return AST_MODULE_LOAD_SUCCESS;
+
+	return AST_MODULE_LOAD_DECLINE;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Discovery CONSUL",
