@@ -45,7 +45,6 @@
 
 /*! \requirements
  *
- * json-c - https://github.com/json-c/json-c
  * libcurl - http://curl.haxx.se/libcurl/c
  * asterisk - http://asterisk.org
  *
@@ -60,12 +59,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <curl/curl.h>
-#include <json-c/json.h>
 #include <asterisk.h>
 #include <asterisk/module.h>
 #include <asterisk/config.h>
 #include <asterisk/cli.h>
 #include <asterisk/astobj2.h>
+#include <asterisk/json.h>
 
 struct curl_put_data {
 	char *data;
@@ -122,6 +121,21 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 	return 0;
 }
 
+static struct ast_json *consul_put_json(void) {
+	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
+
+	if (!obj) {
+		return NULL;
+	}
+
+	ast_json_object_set(obj, "ID", ast_json_string_create(global_config.id));
+	ast_json_object_set(obj, "Name", ast_json_string_create(global_config.name));
+	ast_json_object_set(obj, "Address", ast_json_string_create(global_config.address_ip));
+	ast_json_object_set(obj, "Port", ast_json_integer_create(5060));
+
+	return ast_json_ref(obj);
+}
+
 CURLcode consul_deregister(CURL *curl)
 {
 	CURLcode rcode;
@@ -150,10 +164,10 @@ CURLcode consul_deregister(CURL *curl)
 CURLcode consul_register(CURL *curl)
 {
 	CURLcode rcode;
-	json_object *jobj;
 	struct curl_put_data putData = {0,0};
 	struct curl_slist *headers = NULL;
 	char *url = (char *) malloc(1024);
+	struct ast_json *obj;
 
         sprintf(url, "http://%s:%d%s", global_config.host, global_config.port, global_config.register_url);
 	ast_log(LOG_NOTICE, "Register URL: %s\n", url);
@@ -162,17 +176,16 @@ CURLcode consul_register(CURL *curl)
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 	headers = curl_slist_append(headers, "charsets: utf-8");
 
-	jobj = json_object_new_object();
-	json_object_object_add(jobj, "ID", json_object_new_string(global_config.id));
-	json_object_object_add(jobj, "Name", json_object_new_string(global_config.name));
-	json_object_object_add(jobj, "Address", json_object_new_string(global_config.address_ip));
-	json_object_object_add(jobj, "Port", json_object_new_int(5060));
+	obj = consul_put_json();
 
-	putData.data = (char *) malloc(strlen(json_object_to_json_string(jobj)));
-	memcpy(putData.data, json_object_to_json_string(jobj), strlen(json_object_to_json_string(jobj)));
-	putData.size = strlen(json_object_to_json_string(jobj));
+	ast_log(LOG_NOTICE, "The json object created: %s : %zu\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT),
+                                                                   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 
-	ast_log(LOG_NOTICE, "The json object created: %s\n", json_object_to_json_string(jobj));
+	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
+                                                         strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+	putData.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -189,7 +202,7 @@ CURLcode consul_register(CURL *curl)
 
 	rcode = curl_easy_perform(curl);
 
-	json_object_put(jobj);
+        ast_json_free(obj);
 	curl_slist_free_all(headers);
         free(url);
 
