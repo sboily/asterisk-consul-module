@@ -134,18 +134,24 @@ static struct ast_json *consul_put_json(void) {
 	return ast_json_ref(obj);
 }
 
-CURLcode consul_deregister(CURL *curl)
-{
-	CURLcode rcode;
+static struct curl_slist *get_headers_json(void) {
 	struct curl_slist *headers = NULL;
-	char *url = (char *) malloc(1024);
-
-        sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port, global_config.deregister_url, global_config.id);
-	ast_log(LOG_NOTICE, "Deregister URL: %s\n", url);
 
 	headers = curl_slist_append(headers, "Accept: application/json");
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 	headers = curl_slist_append(headers, "charsets: utf-8");
+
+	return headers;
+}
+
+CURLcode consul_deregister(CURL *curl)
+{
+	CURLcode rcode;
+	struct curl_slist *headers;
+	char *url = (char *) malloc(1024);
+
+        sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port, global_config.deregister_url, global_config.id);
+        headers = get_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -163,19 +169,14 @@ CURLcode consul_register(CURL *curl)
 {
 	CURLcode rcode;
 	struct curl_put_data putData = {0,0};
-	struct curl_slist *headers = NULL;
+	struct curl_slist *headers;
 	char *url = (char *) malloc(1024);
 	struct ast_json *obj;
 
-        sprintf(url, "http://%s:%d%s", global_config.host, global_config.port, global_config.register_url);
-	ast_log(LOG_NOTICE, "Register URL: %s\n", url);
-
-	headers = curl_slist_append(headers, "Accept: application/json");
-	headers = curl_slist_append(headers, "Content-Type: application/json");
-	headers = curl_slist_append(headers, "charsets: utf-8");
-
+        headers = get_headers_json();
 	obj = consul_put_json();
 
+        sprintf(url, "http://%s:%d%s", global_config.host, global_config.port, global_config.register_url);
 	ast_log(LOG_NOTICE, "The json object created: %s : %zu\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT),
                                                                    strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 
@@ -183,7 +184,6 @@ CURLcode consul_register(CURL *curl)
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
                                                          strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	putData.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
-
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
