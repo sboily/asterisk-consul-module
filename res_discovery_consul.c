@@ -62,8 +62,6 @@
 #include <asterisk.h>
 #include <asterisk/module.h>
 #include <asterisk/config.h>
-#include <asterisk/cli.h>
-#include <asterisk/astobj2.h>
 #include <asterisk/json.h>
 
 struct curl_put_data {
