@@ -44,7 +44,7 @@ To play with the module
 docker-compose
 --------------
 
-    docker-compose build
+    docker-compose build --no-cache
     docker-compose up -d
     docker-compose scale asterisk=5
 
@@ -55,3 +55,7 @@ HA webi (xivo/xivo)
 Consul webi (token: the_one_ring)
 
     http://your_ip:8500/ui
+
+ARI interface (xivo/xivo)
+
+    http://your_ip:8888/ari
