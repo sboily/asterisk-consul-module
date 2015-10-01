@@ -123,6 +123,7 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 /*! \brief Function called to create json object for curl */
 static struct ast_json *consul_put_json(void) {
 	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
+        RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_ref);
 
 	if (!obj) {
 		return NULL;
@@ -132,6 +133,12 @@ static struct ast_json *consul_put_json(void) {
 	ast_json_object_set(obj, "Name", ast_json_string_create(global_config.name));
 	ast_json_object_set(obj, "Address", ast_json_string_create(global_config.address_ip));
 	ast_json_object_set(obj, "Port", ast_json_integer_create(5060));
+	ast_json_object_set(obj, "Tags", tags);
+
+	ast_json_array_append(tags, ast_json_string_create(global_config.tags));
+
+	ast_log(LOG_NOTICE, "The json object created: %s\n",
+		ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	return ast_json_ref(obj);
 }
