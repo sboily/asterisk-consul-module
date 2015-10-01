@@ -10,4 +10,5 @@ port=8500
 register_url=/v1/agent/service/register
 deregister_url=/v1/agent/service/deregister
 tags=asterisk
-address_ip=192.168.1.10
+discovery_ip=192.168.1.10
+discovery_port=5060

@@ -75,7 +75,8 @@ typedef struct discovery_config {
         char id[256];
         char name[256];
         char host[256];
-        char address_ip[256];
+        char discovery_ip[256];
+        char discovery_port;
         int port;
         char register_url[256];
         char deregister_url[256];
@@ -88,7 +89,8 @@ static struct discovery_config global_config = {
 	.id = "asterisk",
         .name = "Asterisk",
 	.host = "127.0.0.1",
-	.address_ip = "127.0.0.1",
+	.discovery_ip = "127.0.0.1",
+	.discovery_port = 5060,
 	.port = 8500,
 	.register_url = "/v1/agent/service/register",
 	.deregister_url = "/v1/agent/service/deregister",
@@ -131,8 +133,8 @@ static struct ast_json *consul_put_json(void) {
 
 	ast_json_object_set(obj, "ID", ast_json_string_create(global_config.id));
 	ast_json_object_set(obj, "Name", ast_json_string_create(global_config.name));
-	ast_json_object_set(obj, "Address", ast_json_string_create(global_config.address_ip));
-	ast_json_object_set(obj, "Port", ast_json_integer_create(5060));
+	ast_json_object_set(obj, "Address", ast_json_string_create(global_config.discovery_ip));
+	ast_json_object_set(obj, "Port", ast_json_integer_create(global_config.discovery_port));
 	ast_json_object_set(obj, "Tags", tags);
 
 	ast_json_array_append(tags, ast_json_string_create(global_config.tags));
@@ -255,8 +257,10 @@ static void load_config(int reload)
 			ast_copy_string(global_config.tags, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "name")) {
 			ast_copy_string(global_config.name, v->value, strlen(v->value) + 1);
-		} else if (!strcasecmp(v->name, "address_ip")) {
-			ast_copy_string(global_config.address_ip, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "discovery_ip")) {
+			ast_copy_string(global_config.discovery_ip, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "discovery_port")) {
+			global_config.discovery_port = atoi(v->value);
                 }
 	}
 
