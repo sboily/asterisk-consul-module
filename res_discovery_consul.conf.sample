@@ -3,8 +3,8 @@ enabled=true
 debug=false
 
 [consul]
-id=my_asterisk
-name=auto ;set hostname or auto to discovery
+id=auto ;set id or auto to generate it
+name=asterisk ;set name or auto to discovery with hostname
 host=consul
 port=8500
 register_url=/v1/agent/service/register

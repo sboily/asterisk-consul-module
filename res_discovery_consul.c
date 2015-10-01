@@ -70,6 +70,7 @@
 #include <asterisk/module.h>
 #include <asterisk/config.h>
 #include <asterisk/json.h>
+#include <asterisk/uuid.h>
 
 struct curl_put_data {
 	char *data;
@@ -113,6 +114,7 @@ CURLcode consul_deregister(CURL *curl);
 CURLcode consul_register(CURL *curl);
 static int discovery_ip_address(void);
 static int discovery_hostname(void);
+static int generate_uuid_id_consul(void);
 
 /*! \brief Function called to read data and inject it on PUT */
 size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
@@ -147,6 +149,9 @@ static struct ast_json *consul_put_json(void) {
 
 	if (!strcasecmp(global_config.name, "auto"))
 		discovery_hostname();
+
+	if (!strcasecmp(global_config.id, "auto"))
+		generate_uuid_id_consul();
 
 	ast_json_object_set(obj, "ID", ast_json_string_create(global_config.id));
 	ast_json_object_set(obj, "Name", ast_json_string_create(global_config.name));
@@ -323,7 +328,8 @@ static int discovery_ip_address(void)
 }
 
 /*! \brief Function called to discovery hostname */
-static int discovery_hostname(void) {
+static int discovery_hostname(void)
+{
 	char hostname[1024];
 
 	gethostname(hostname, 1024);
@@ -331,6 +337,21 @@ static int discovery_hostname(void) {
 
 	if (global_config.debug)
 		ast_log(LOG_NOTICE,"Discovery hostname: %s\n", hostname);
+
+	return 0;
+}
+
+/*! \brief Function called to generate uuid */
+static int generate_uuid_id_consul(void)
+{
+	const char *uuid;
+	char uuid_str[256];
+
+	uuid = ast_uuid_generate_str(uuid_str, sizeof(uuid_str));
+	ast_copy_string(global_config.id, uuid, strlen(uuid) + 1);
+
+	if (global_config.debug)
+		ast_log(LOG_NOTICE,"Auto ID: %s\n", uuid);
 
 	return 0;
 }
@@ -393,6 +414,7 @@ static int load_module(void)
 {
 	if (load_res(1) == AST_MODULE_LOAD_SUCCESS)
 		return AST_MODULE_LOAD_SUCCESS;
+
 
 	return AST_MODULE_LOAD_DECLINE;
 }
