@@ -101,6 +101,7 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data);
 CURLcode consul_deregister(CURL *curl);
 CURLcode consul_register(CURL *curl);
 
+/*! \brief Function called to read data and inject it on PUT */
 size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 {
 	size_t realsize = size * nmemb;
@@ -119,6 +120,7 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 	return 0;
 }
 
+/*! \brief Function called to create json object for curl */
 static struct ast_json *consul_put_json(void) {
 	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
 
@@ -134,7 +136,8 @@ static struct ast_json *consul_put_json(void) {
 	return ast_json_ref(obj);
 }
 
-static struct curl_slist *get_headers_json(void) {
+/*! \brief Function called to set headers for curl */
+static struct curl_slist *set_headers_json(void) {
 	struct curl_slist *headers = NULL;
 
 	headers = curl_slist_append(headers, "Accept: application/json");
@@ -144,6 +147,7 @@ static struct curl_slist *get_headers_json(void) {
 	return headers;
 }
 
+/*! \brief Function called to deregister via curl on consul */
 CURLcode consul_deregister(CURL *curl)
 {
 	CURLcode rcode;
@@ -151,7 +155,7 @@ CURLcode consul_deregister(CURL *curl)
 	char *url = (char *) malloc(1024);
 
         sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port, global_config.deregister_url, global_config.id);
-        headers = get_headers_json();
+        headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -165,6 +169,7 @@ CURLcode consul_deregister(CURL *curl)
 	return rcode;
 }
 
+/*! \brief Function called to register via curl on consul */
 CURLcode consul_register(CURL *curl)
 {
 	CURLcode rcode;
@@ -173,12 +178,10 @@ CURLcode consul_register(CURL *curl)
 	char *url = (char *) malloc(1024);
 	struct ast_json *obj;
 
-        headers = get_headers_json();
+        headers = set_headers_json();
 	obj = consul_put_json();
 
         sprintf(url, "http://%s:%d%s", global_config.host, global_config.port, global_config.register_url);
-	ast_log(LOG_NOTICE, "The json object created: %s : %zu\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT),
-                                                                   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 
 	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
@@ -224,10 +227,8 @@ static void load_config(int reload)
 
 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {
 		if (!strcasecmp(v->name, "enabled")) {
-                        ast_log(LOG_NOTICE, "enabled : %s\n", v->value);
 			global_config.enabled = atoi(v->value);
 		} else if (!strcasecmp(v->name, "debug")) {
-                        ast_log(LOG_NOTICE, "debug : %s\n", v->value);
 			global_config.debug = atoi(v->value);
                 }
         }
@@ -235,27 +236,19 @@ static void load_config(int reload)
 	for (v = ast_variable_browse(cfg, "consul"); v; v = v->next) {
 		if (!strcasecmp(v->name, "id")) {
 			ast_copy_string(global_config.id, v->value, strlen(v->value) + 1);
-                        ast_log(LOG_NOTICE, "id : %s\n", v->value);
 		} else if (!strcasecmp(v->name, "host")) {
-                        ast_log(LOG_NOTICE, "host : %s\n", v->value);
 			ast_copy_string(global_config.host, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "port")) {
-                        ast_log(LOG_NOTICE, "port : %s\n", v->value);
 			global_config.port = atoi(v->value);
 		} else if (!strcasecmp(v->name, "register_url")) {
-                        ast_log(LOG_NOTICE, "register_url : %s\n", v->value);
 			ast_copy_string(global_config.register_url, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "deregister_url")) {
-                        ast_log(LOG_NOTICE, "deregister_url : %s\n", v->value);
 			ast_copy_string(global_config.deregister_url, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "tags")) {
-                        ast_log(LOG_NOTICE, "tags : %s\n", v->value);
 			ast_copy_string(global_config.tags, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "name")) {
-                        ast_log(LOG_NOTICE, "name : %s\n", v->value);
 			ast_copy_string(global_config.name, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "address_ip")) {
-                        ast_log(LOG_NOTICE, "address_ip : %s\n", v->value);
 			ast_copy_string(global_config.address_ip, v->value, strlen(v->value) + 1);
                 }
 	}
@@ -265,6 +258,7 @@ static void load_config(int reload)
 	return;
 }
 
+/*! \brief Function called to load the resource */
 static void load_res(int start)
 {
 	CURL *curl;
