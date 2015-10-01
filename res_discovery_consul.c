@@ -163,7 +163,8 @@ CURLcode consul_deregister(CURL *curl)
 	struct curl_slist *headers;
 	char *url = (char *) malloc(1024);
 
-        sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port, global_config.deregister_url, global_config.id);
+        sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
+				          global_config.deregister_url, global_config.id);
         headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
@@ -190,7 +191,8 @@ CURLcode consul_register(CURL *curl)
         headers = set_headers_json();
 	obj = consul_put_json();
 
-        sprintf(url, "http://%s:%d%s", global_config.host, global_config.port, global_config.register_url);
+        sprintf(url, "http://%s:%d%s", global_config.host, global_config.port,
+				       global_config.register_url);
 
 	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
