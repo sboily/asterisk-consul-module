@@ -40,3 +40,18 @@ To play with the module
     asterisk -r
     CLI> modules unload res_discovery_consul.so
     CLI> modules load res_discovery_consul.so
+
+docker-compose
+--------------
+
+    docker-compose build
+    docker-compose up -d
+    docker-compose scale asterisk=5
+
+HA webi (xivo/xivo)
+
+    http://your_ip:1936/
+
+Consul webi (token: the_one_ring)
+
+    http://your_ip:8500/ui
