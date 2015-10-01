@@ -28,9 +28,15 @@ Read the config sample.
 Docker
 ------
 
+First edit the sample to have a good configuration.
 To build image to test with docker.
 
     docker build -t asterisk-consul .
     docker run -it asterisk-consul bash
+    asterisk
+
+To play with the module
+
     asterisk -r
+    CLI> modules unload res_discovery_consul.so
     CLI> modules load res_discovery_consul.so
