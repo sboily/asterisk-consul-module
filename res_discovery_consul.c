@@ -76,7 +76,7 @@ typedef struct discovery_config {
         char name[256];
         char host[256];
         char discovery_ip[256];
-        char discovery_port;
+        int discovery_port;
         int port;
         char register_url[256];
         char deregister_url[256];
