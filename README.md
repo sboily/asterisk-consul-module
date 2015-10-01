@@ -9,7 +9,6 @@ Requirements
 ------------
 - Asterisk 13.x (or later) header files
 - LibCurl (or later) libraries and header files
-- Json-c (or later) libraries and header files
 
 Installation
 ------------
@@ -20,3 +19,18 @@ To install the sample configuration file, issue the following command after
 the 'make install' command:
 
     $ make samples
+
+Configuration
+-------------
+
+Read the config sample.
+
+Docker
+------
+
+To build image to test with docker.
+
+    docker build -t asterisk-consul .
+    docker run -it asterisk-consul bash
+    asterisk -r
+    CLI> modules load res_discovery_consul.so
