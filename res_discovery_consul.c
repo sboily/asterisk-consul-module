@@ -310,7 +310,9 @@ static int discovery_ip_address(void)
 
 	sprintf(host, "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
 	ast_copy_string(global_config.discovery_ip, host, strlen(host) + 1);
-	ast_log(LOG_NOTICE,"Discovery IP: %s\n", host);
+
+	if (global_config.debug)
+		ast_log(LOG_NOTICE,"Discovery IP: %s\n", host);
 
 	return 0;
 }
