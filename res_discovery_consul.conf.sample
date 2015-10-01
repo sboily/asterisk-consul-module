@@ -4,7 +4,7 @@ debug=false
 
 [consul]
 id=my_asterisk
-name=asterisk
+name=auto ;set hostname or auto to discovery
 host=consul
 port=8500
 register_url=/v1/agent/service/register

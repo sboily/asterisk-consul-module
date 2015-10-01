@@ -1,0 +1,25 @@
+global
+    daemon
+    user root
+    group root
+    stats socket /var/run/haproxy/haproxy.sock mode 0660 level admin
+    stats timeout 30s
+
+defaults
+    retries 3
+    maxconn 2000
+    balance roundrobin
+    timeout client 125s
+    timeout server 125s
+    timeout connect 10s
+
+listen asterisk-ari *:8888
+    mode http {{range service "asterisk"}}
+    server {{.Name}}_{{.ID}} {{.Address}}:8888 check{{end}}
+
+listen stats *:1936
+    mode http
+    stats enable
+    stats uri /
+    stats hide-version
+    stats auth xivo:xivo

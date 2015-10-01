@@ -10,5 +10,7 @@ RUN make
 RUN make install
 RUN make samples
 
+RUN rm /etc/asterisk/*
 ADD res_discovery_consul.conf.sample /etc/asterisk/res_discovery_consul.conf
+ADD contribs/asterisk/*.conf /etc/asterisk/
 ONBUILD ADD res_discovery_consul.conf.sample /etc/asterisk/res_discovery_consul.conf

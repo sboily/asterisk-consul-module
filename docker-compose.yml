@@ -1,0 +1,22 @@
+asterisk:
+  build: .
+  links:
+    - consul
+  expose:
+    - 8888
+consul:
+  image: progrium/consul
+  ports:
+    - "8500:8500"
+  command: -server -bootstrap -ui-dir /ui
+lb:
+  build: ./contribs/haproxy/
+  dockerfile: Dockerfile
+  links:
+    - consul
+  ports:
+    - "8888:8888"
+    - "1936:1936"
+  expose:
+    - "8888"
+    - "1936"
