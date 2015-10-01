@@ -16,7 +16,7 @@ TARGET = res_discovery_consul.so
 OBJECTS = res_discovery_consul.o
 CFLAGS += -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Winit-self -Wmissing-format-attribute \
           -Wformat=2 -g -fPIC -D_GNU_SOURCE -D'AST_MODULE="res_discovery_consul"' 
-LIBS += -lcurl -ljson-c
+LIBS += -lcurl
 LDFLAGS = -Wall -shared
 
 ifdef VERSION
