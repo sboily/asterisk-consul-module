@@ -58,6 +58,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 #include <curl/curl.h>
 #include <asterisk.h>
 #include <asterisk/module.h>
@@ -75,8 +82,9 @@ typedef struct discovery_config {
         char id[256];
         char name[256];
         char host[256];
-        char discovery_ip[256];
+        char discovery_ip[16];
         int discovery_port;
+        char discovery_interface[32];
         int port;
         char register_url[256];
         char deregister_url[256];
@@ -91,6 +99,7 @@ static struct discovery_config global_config = {
 	.host = "127.0.0.1",
 	.discovery_ip = "127.0.0.1",
 	.discovery_port = 5060,
+	.discovery_interface = "eth0",
 	.port = 8500,
 	.register_url = "/v1/agent/service/register",
 	.deregister_url = "/v1/agent/service/deregister",
@@ -102,6 +111,7 @@ static const char config_file[] = "res_discovery_consul.conf";
 size_t readData(char *ptr, size_t size, size_t nmemb, void* data);
 CURLcode consul_deregister(CURL *curl);
 CURLcode consul_register(CURL *curl);
+static int discovery_ip_address(void);
 
 /*! \brief Function called to read data and inject it on PUT */
 size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
@@ -130,6 +140,9 @@ static struct ast_json *consul_put_json(void) {
 	if (!obj) {
 		return NULL;
 	}
+
+	if (!strcasecmp(global_config.discovery_ip, "auto"))
+		discovery_ip_address();
 
 	ast_json_object_set(obj, "ID", ast_json_string_create(global_config.id));
 	ast_json_object_set(obj, "Name", ast_json_string_create(global_config.name));
@@ -273,13 +286,35 @@ static void load_config(int reload)
 			ast_copy_string(global_config.discovery_ip, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "discovery_port")) {
 			global_config.discovery_port = atoi(v->value);
-                }
+		} else if (!strcasecmp(v->name, "discovery_interface")) {
+			ast_copy_string(global_config.discovery_interface, v->value, strlen(v->value) + 1);
+		}
 	}
 
 	ast_config_destroy(cfg);
 
 	return;
 }
+
+static int discovery_ip_address(void)
+{
+	int fd;
+	struct ifreq ifr;
+	char host[16];
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	ifr.ifr_addr.sa_family = AF_INET;
+	strncpy(ifr.ifr_name, global_config.discovery_interface, IFNAMSIZ-1);
+	ioctl(fd, SIOCGIFADDR, &ifr);
+	close(fd);
+
+	sprintf(host, "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
+	ast_copy_string(global_config.discovery_ip, host, strlen(host) + 1);
+	ast_log(LOG_NOTICE,"Discovery IP: %s\n", host);
+
+	return 0;
+}
+
 
 /*! \brief Function called to load the resource */
 static int load_res(int start)
