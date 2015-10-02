@@ -20,3 +20,10 @@ lb:
   expose:
     - "8888"
     - "1936"
+#phone:
+#  build: ./contribs/linphone
+#  links:
+#    - asterisk
+#  volumes:
+#    - /dev/snd:/dev/snd
+#  privileged: true
