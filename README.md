@@ -41,6 +41,11 @@ To play with the module
     CLI> modules unload res_discovery_consul.so
     CLI> modules load res_discovery_consul.so
 
+To show settings
+
+    asterisk -r
+    CLI> discovery show settings
+
 docker-compose
 --------------
 

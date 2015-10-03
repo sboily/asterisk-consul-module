@@ -71,6 +71,7 @@
 #include <asterisk/config.h>
 #include <asterisk/json.h>
 #include <asterisk/uuid.h>
+#include <asterisk/cli.h>
 
 struct curl_put_data {
 	char *data;
@@ -389,6 +390,47 @@ static int load_res(int start)
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
+/*! \brief Function called to exec CLI */
+static char *handle_cli_discovery(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a) {
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "discovery show settings";
+		e->usage =
+			"Usage: discovery show settings\n"
+			"       Get the settings of discovery service.\n\n"
+			"       Example:\n"
+			"           discovery show settings\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, "\n\nGlobal Settings:\n");
+	ast_cli(a->fd, "----------------\n");
+	ast_cli(a->fd, "Debug: %d\n", global_config.debug);
+	ast_cli(a->fd, "ID service: %s\n", global_config.id);
+	ast_cli(a->fd, "Name service: %s\n", global_config.name);
+	ast_cli(a->fd, "Tags service: %s\n\n", global_config.tags);
+	ast_cli(a->fd, "Discovery Settings:\n");
+	ast_cli(a->fd, "-------------------\n");
+	ast_cli(a->fd, "Discovery ip: %s\n", global_config.discovery_ip);
+	ast_cli(a->fd, "Discovery port: %d\n", global_config.discovery_port);
+	ast_cli(a->fd, "Discovery interface: %s\n\n", global_config.discovery_interface);
+	ast_cli(a->fd, "Consul Settings:\n");
+	ast_cli(a->fd, "----------------\n");
+	ast_cli(a->fd, "Connection: %s:%d\n", global_config.host, global_config.port);
+	ast_cli(a->fd, "URL register: %s\n", global_config.register_url);
+	ast_cli(a->fd, "URL deregister: %s\n\n", global_config.deregister_url);
+	ast_cli(a->fd, "----\n");
+
+	return NULL;
+}
+
+/*! \brief Function called to define CLI */
+static struct ast_cli_entry cli_discovery[] = {
+	AST_CLI_DEFINE(handle_cli_discovery, "Show discovery settings")
+};
 
 /*! \brief Function called to reload the module */
 static int reload_module(void)
@@ -401,6 +443,7 @@ static int reload_module(void)
 static int unload_module(void)
 {
 	load_res(0);
+	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
 	return 0;
 }
 
@@ -416,8 +459,10 @@ static int unload_module(void)
  */
 static int load_module(void)
 {
-	if (load_res(1) == AST_MODULE_LOAD_SUCCESS)
+	if (load_res(1) == AST_MODULE_LOAD_SUCCESS) {
+		ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
 		return AST_MODULE_LOAD_SUCCESS;
+	}
 
 
 	return AST_MODULE_LOAD_DECLINE;
