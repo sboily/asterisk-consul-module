@@ -113,6 +113,7 @@ static const char config_file[] = "res_discovery_consul.conf";
 size_t readData(char *ptr, size_t size, size_t nmemb, void* data);
 CURLcode consul_deregister(CURL *curl);
 CURLcode consul_register(CURL *curl);
+CURLcode consul_maintenance_service(CURL *curl, const char *enable);
 static int discovery_ip_address(void);
 static int discovery_hostname(void);
 static int generate_uuid_id_consul(void);
@@ -193,6 +194,33 @@ CURLcode consul_deregister(CURL *curl)
 
         sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
 				          global_config.deregister_url, global_config.id);
+        headers = set_headers_json();
+
+	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
+
+	if (global_config.debug)
+		ast_log(LOG_NOTICE, "Deregister node %s with url %s\n", global_config.id, url);
+
+	rcode = curl_easy_perform(curl);
+	curl_slist_free_all(headers);
+        free(url);
+
+	return rcode;
+}
+
+/*! \brief Function called to deregister via curl on consul */
+CURLcode consul_maintenance_service(CURL *curl, const char *enable)
+{
+	CURLcode rcode;
+	struct curl_slist *headers;
+	char *url = (char *) malloc(1024);
+	char maintenance_url[256] = "/v1/agent/service/maintenance/";
+	
+        sprintf(url, "http://%s:%d%s/%s?enable=%s", global_config.host, global_config.port,
+				          maintenance_url, global_config.id, enable);
         headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
@@ -369,7 +397,6 @@ static int load_res(int start)
 	CURLcode rcode;
 
 	curl = curl_easy_init();
-	load_config(0);
 
 	if (global_config.enabled == 0) {
 		ast_log(LOG_NOTICE, "This module is disabled\n");
@@ -391,8 +418,8 @@ static int load_res(int start)
 }
 
 /*! \brief Function called to exec CLI */
-static char *handle_cli_discovery(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a) {
-
+static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "discovery show settings";
@@ -427,9 +454,41 @@ static char *handle_cli_discovery(struct ast_cli_entry *e, int cmd, struct ast_c
 	return NULL;
 }
 
+/*! \brief Function called to exec CLI */
+static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	CURL *curl;
+	CURLcode rcode;
+
+	curl = curl_easy_init();
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "discovery set maintenance";
+		e->usage =
+			"Usage: discovery set maintenance\n"
+			"       Set service in maintenance mode.\n\n"
+			"       Example:\n"
+			"           discovery set maintenance\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	rcode = consul_maintenance_service(curl, "true");
+	ast_cli(a->fd, "Maintenance mode for service %s is set\n", global_config.id);
+	if(rcode != CURLE_OK)
+                ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+ 
+	curl_easy_cleanup(curl);
+
+	return NULL;
+}
+
 /*! \brief Function called to define CLI */
 static struct ast_cli_entry cli_discovery[] = {
-	AST_CLI_DEFINE(handle_cli_discovery, "Show discovery settings")
+	AST_CLI_DEFINE(discovery_cli_settings, "Show discovery settings"),
+	AST_CLI_DEFINE(discovery_cli_set_maintenance, "Set discovery service in maintenance mode")
 };
 
 /*! \brief Function called to reload the module */
@@ -459,6 +518,7 @@ static int unload_module(void)
  */
 static int load_module(void)
 {
+	load_config(0);
 	if (load_res(1) == AST_MODULE_LOAD_SUCCESS) {
 		ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
 		return AST_MODULE_LOAD_SUCCESS;
