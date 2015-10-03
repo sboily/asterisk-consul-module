@@ -177,7 +177,7 @@ static struct ast_json *consul_put_json(void) {
 		ast_json_object_set(obj, "Check", ast_json_ref(check));
 		ast_json_object_set(check, "Http", ast_json_string_create(url_check));
 		ast_json_object_set(check, "Interval", ast_json_string_create("15s"));
-		free(url_check);
+		ast_free(url_check);
 	}
 
 	if (global_config.debug)
@@ -232,7 +232,7 @@ CURLcode consul_deregister(CURL *curl)
 
 	rcode = curl_easy_perform(curl);
 	curl_slist_free_all(headers);
-        free(url);
+        ast_free(url);
 
 	return rcode;
 }
@@ -246,11 +246,12 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	char *url = (char *) malloc(1024);
 	char maintenance_url[256] = "/v1/agent/service/maintenance/";
 	struct ast_json *obj;
+	char *reason = curl_easy_escape(curl, "Maintenance activated by Asterisk module", 41);
 
 	obj = consul_put_maintenance_json();
-	
-        sprintf(url, "http://%s:%d%s%s?enable=%s", global_config.host, global_config.port,
-				          maintenance_url, global_config.id, enable);
+
+        sprintf(url, "http://%s:%d%s%s?enable=%s&reason=%s", global_config.host, global_config.port,
+				          maintenance_url, global_config.id, enable, reason);
 
 	if (strcasecmp(global_config.token, ""))
 		sprintf(url, "%s&token=%s", url, global_config.token);
@@ -277,7 +278,8 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
         ast_json_free(obj);
 	curl_slist_free_all(headers);
-        free(url);
+	curl_free(reason);
+        ast_free(url);
 
 	return rcode;
 }
@@ -322,7 +324,7 @@ CURLcode consul_register(CURL *curl)
 
         ast_json_free(obj);
 	curl_slist_free_all(headers);
-        free(url);
+        ast_free(url);
 
 	return rcode;
 }
