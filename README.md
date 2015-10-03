@@ -48,6 +48,12 @@ To show settings
     asterisk -r
     CLI> discovery show settings
 
+To enable or disable maintenance mode
+
+    asterisk -r
+    CLI> discovery set maintenance on
+    CLI> discovery set maintenance off
+
 docker-compose
 --------------
 

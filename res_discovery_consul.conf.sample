@@ -14,5 +14,5 @@ tags=asterisk
 discovery_ip=auto ;set ip or auto to discovery the ip
 discovery_port=5060
 discovery_interface=eth0 ;only use if discovery_ip is auto
-check=false
-check_http_port=8088
+check=true
+check_http_port=8888
