@@ -91,6 +91,9 @@ typedef struct discovery_config {
         char register_url[256];
         char deregister_url[256];
         char tags[256];
+        char token[256];
+        int check;
+	int check_http_port;
 } discovery_config;
 
 static struct discovery_config global_config = {
@@ -105,7 +108,10 @@ static struct discovery_config global_config = {
 	.port = 8500,
 	.register_url = "/v1/agent/service/register",
 	.deregister_url = "/v1/agent/service/deregister",
-	.tags = "asterisk"
+	.tags = "asterisk",
+	.token = "",
+	.check = 0,
+	.check_http_port = 8088
 };
 
 static const char config_file[] = "res_discovery_consul.conf";
@@ -141,14 +147,13 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 static struct ast_json *consul_put_json(void) {
 	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
         RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_unref);
+        RAII_VAR(struct ast_json *, check, ast_json_object_create(), ast_json_unref);
 
-	if (!obj) {
-		return NULL;
-	}
+	char *url_check = (char *) malloc(1024);
 
-	if (!tags) {
-		return NULL;
-	}
+	if (!obj) {return NULL;}
+	if (!tags) {return NULL;}
+	if (!check) {return NULL;}
 
 	if (!strcasecmp(global_config.discovery_ip, "auto"))
 		discovery_ip_address();
@@ -166,6 +171,14 @@ static struct ast_json *consul_put_json(void) {
 	ast_json_object_set(obj, "Tags", ast_json_ref(tags));
 
 	ast_json_array_append(tags, ast_json_string_create(global_config.tags));
+
+	if (global_config.check == 1) {
+		sprintf(url_check, "http://%s:%d/httpstatus", global_config.discovery_ip, global_config.check_http_port);
+		ast_json_object_set(obj, "Check", ast_json_ref(check));
+		ast_json_object_set(check, "Http", ast_json_string_create(url_check));
+		ast_json_object_set(check, "Interval", ast_json_string_create("15s"));
+		free(url_check);
+	}
 
 	if (global_config.debug)
 		ast_log(LOG_NOTICE, "The json object created: %s\n",
@@ -194,6 +207,10 @@ CURLcode consul_deregister(CURL *curl)
 
         sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
 				          global_config.deregister_url, global_config.id);
+
+	if (strcasecmp(global_config.token, ""))
+		sprintf(url, "%s?token=%s", url, global_config.token);
+
         headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
@@ -221,6 +238,10 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	
         sprintf(url, "http://%s:%d%s/%s?enable=%s", global_config.host, global_config.port,
 				          maintenance_url, global_config.id, enable);
+
+	if (strcasecmp(global_config.token, ""))
+		sprintf(url, "%s&token=%s", url, global_config.token);
+
         headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
@@ -249,6 +270,9 @@ CURLcode consul_register(CURL *curl)
 
         sprintf(url, "http://%s:%d%s", global_config.host, global_config.port,
 				       global_config.register_url);
+
+	if (strcasecmp(global_config.token, ""))
+		sprintf(url, "%s?token=%s", url, global_config.token);
 
 	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
@@ -285,10 +309,11 @@ static void load_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_variable *v;
 
-	int enabled, debug;
+	int enabled, debug, check;
 
 	enabled = 1;
 	debug = 1;
+	check = 1;
 
 	if (!(cfg = ast_config_load(config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "res_discovery_consul configuration file '%s' not found\n", config_file);
@@ -330,6 +355,14 @@ static void load_config(int reload)
 			global_config.discovery_port = atoi(v->value);
 		} else if (!strcasecmp(v->name, "discovery_interface")) {
 			ast_copy_string(global_config.discovery_interface, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "token")) {
+			ast_copy_string(global_config.token, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "check")) {
+			if (ast_true(v->value) == 0)
+				check = 0;
+			global_config.check = check;
+		} else if (!strcasecmp(v->name, "check_http_port")) {
+			global_config.check_http_port =  atoi(v->value);
 		}
 	}
 
@@ -447,8 +480,11 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	ast_cli(a->fd, "Consul Settings:\n");
 	ast_cli(a->fd, "----------------\n");
 	ast_cli(a->fd, "Connection: %s:%d\n", global_config.host, global_config.port);
+	ast_cli(a->fd, "Token: %s\n", global_config.token);
 	ast_cli(a->fd, "URL register: %s\n", global_config.register_url);
-	ast_cli(a->fd, "URL deregister: %s\n\n", global_config.deregister_url);
+	ast_cli(a->fd, "URL deregister: %s\n", global_config.deregister_url);
+	ast_cli(a->fd, "Check: %d\n", global_config.check);
+	ast_cli(a->fd, "Check http port: %d\n\n", global_config.check_http_port);
 	ast_cli(a->fd, "----\n");
 
 	return NULL;

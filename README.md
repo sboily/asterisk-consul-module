@@ -25,6 +25,8 @@ Configuration
 
 Read the config sample.
 
+If you want to enable the http check, to need to enable the http interface, and it need to be accessible by consul.
+
 Docker
 ------
 
