@@ -464,10 +464,10 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "discovery set maintenance";
+		e->command = "discovery set maintenance {on|off}";
 		e->usage =
-			"Usage: discovery set maintenance\n"
-			"       Set service in maintenance mode.\n\n"
+			"Usage: discovery set maintenance {on|off}\n"
+			"       Enable/disable service in maintenance mode.\n\n"
 			"       Example:\n"
 			"           discovery set maintenance\n";
 		return NULL;
@@ -475,9 +475,19 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 		return NULL;
 	}
 
-	rcode = consul_maintenance_service(curl, "true");
-	ast_cli(a->fd, "Maintenance mode for service %s is set\n", global_config.id);
-	if(rcode != CURLE_OK)
+	if (a->argc != e->args) {
+		return CLI_SHOWUSAGE;
+	}
+
+	if (!strncasecmp(a->argv[e->args - 1], "on", 2)) {
+		rcode = consul_maintenance_service(curl, "true");
+		ast_cli(a->fd, "Maintenance mode for service %s is set\n", global_config.id);
+	} else if (!strncasecmp(a->argv[e->args - 1], "off", 3)) {
+		rcode = consul_maintenance_service(curl, "false");
+		ast_cli(a->fd, "Maintenance mode for service %s is unset\n", global_config.id);
+	}
+
+	if (rcode != CURLE_OK)
                 ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
  
 	curl_easy_cleanup(curl);
