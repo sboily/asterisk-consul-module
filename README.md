@@ -48,10 +48,10 @@ To enable or disable maintenance mode
     CLI> discovery set maintenance on
     CLI> discovery set maintenance off
 
-Missing feature
----------------
+Roadmap
+-------
 
-- https with consul
+- API consul via https
 
 Docker
 ------
