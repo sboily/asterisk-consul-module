@@ -54,6 +54,7 @@ Roadmap
 - API consul via https
 - Support for consul KV, if you want to add specific information
 - Support TTL check from consul (https://consul.io/docs/agent/checks.html)
+- Disable or enable check via CLI
 
 Docker
 ------
