@@ -27,23 +27,16 @@ Read the config sample.
 
 If you want to enable the http check, to need to enable the http interface, and it need to be accessible by consul.
 
-Docker
+To use
 ------
 
-First edit the sample to have a good configuration.
-To build image to test with docker.
-
-    docker build -t asterisk-consul .
-    docker run -it asterisk-consul bash
-    asterisk
-
-To play with the module
+Loading module
 
     asterisk -r
     CLI> modules unload res_discovery_consul.so
     CLI> modules load res_discovery_consul.so
 
-To show settings
+Show settings on CLI
 
     asterisk -r
     CLI> discovery show settings
@@ -53,6 +46,17 @@ To enable or disable maintenance mode
     asterisk -r
     CLI> discovery set maintenance on
     CLI> discovery set maintenance off
+
+
+Docker
+------
+
+First edit the sample to have a good configuration.
+To build image to test with docker.
+
+    docker build -t asterisk-consul .
+    docker run -it asterisk-consul bash
+    asterisk
 
 docker-compose
 --------------
