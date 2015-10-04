@@ -51,7 +51,7 @@ To enable or disable maintenance mode
 Docker
 ------
 
-First edit the sample to have a good configuration.
+Edit the sample to have the good configuration.
 To build image to test with docker.
 
     docker build -t asterisk-consul .
