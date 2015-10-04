@@ -58,7 +58,7 @@ To build image to test with docker.
     docker run -it asterisk-consul bash
     asterisk
 
-docker-compose
+Docker-compose
 --------------
 
     docker-compose build --no-cache
