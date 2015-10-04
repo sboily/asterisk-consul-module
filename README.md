@@ -7,8 +7,9 @@ It works with asterisk versions 13.x or later
 
 Requirements
 ------------
-- Asterisk 13.x (or later) header files
-- LibCurl (or later) libraries and header files
+- Asterisk 13.x (or later) header files (http://asterisk.org)
+- LibCurl (or later) libraries and header files (http://curl.haxx.se/libcurl/)
+- Consul (http://consul.io)
 
 Installation
 ------------
