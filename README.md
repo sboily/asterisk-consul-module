@@ -85,3 +85,8 @@ Consul webi (token: the_one_ring)
 ARI interface (xivo/xivo)
 
     http://your_ip:8888/ari
+
+Schema
+------
+
+![Asterisk Consul screenshot](/contribs/images/asterisk-consul.png?raw=true "Asterisk Consul")
