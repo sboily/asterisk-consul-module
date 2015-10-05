@@ -56,6 +56,8 @@ Roadmap
 - Support TTL check from consul (https://consul.io/docs/agent/checks.html)
 - Disable or enable check via CLI
 - Fire an event on register/deregister (https://consul.io/docs/agent/http/event.html)
+- Test
+- Action and Event via AMI
 
 Docker
 ------
