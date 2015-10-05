@@ -66,12 +66,69 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <curl/curl.h>
-#include <asterisk.h>
-#include <asterisk/module.h>
-#include <asterisk/config.h>
-#include <asterisk/json.h>
-#include <asterisk/uuid.h>
-#include <asterisk/cli.h>
+
+#include "asterisk.h"
+#include "asterisk/module.h"
+#include "asterisk/config.h"
+#include "asterisk/json.h"
+#include "asterisk/uuid.h"
+#include "asterisk/cli.h"
+#include "asterisk/manager.h"
+
+/*** DOCUMENTATION
+	<configInfo name="res_discovery_consul" language="en_US">
+		<synopsis>Consul client.</synopsis>
+		<configFile name="res_discovery_consul.conf">
+			<configObject name="general">
+				<synopsis>Global configuration settings</synopsis>
+				<configOption name="enabled">
+					<synopsis>Enable/disable the consul module</synopsis>
+				</configOption>
+				<configOption name="debug">
+					<synopsis>Enable/disable debug</synopsis>
+				</configOption>
+			</configObject>
+		</configFile>
+	</configInfo>
+	<manager name="DiscoverySetMaintenance" language="en_US">
+		<synopsis>
+			Discovery consul.
+		</synopsis>
+		<description>
+			<para>...</para>
+		</description>
+	</manager>
+	<managerEvent language="en_US" name="DiscoveryRegister">
+		<managerEventInstance class="EVENT_FLAG_SYSTEM">
+			<synopsis>Raised when are registred to consul.</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/managerEvent[@name='DiscoveryRegister']/managerEventInstance/syntax/parameter)" />
+		</syntax>
+		<see-also>
+			<ref type="managerEvent">DiscoveryDeregister</ref>
+		</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="DiscoveryDeregister">
+		<managerEventInstance class="EVENT_FLAG_SYSTEM">
+			<synopsis>Raised when are deregistred to consul.</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/managerEvent[@name='DiscoveryDeregister']/managerEventInstance/syntax/parameter)" />
+		</syntax>
+		<see-also>
+			<ref type="managerEvent">DiscoveryDeregister</ref>
+		</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="DiscoverySetMaintenance">
+		<managerEventInstance class="EVENT_FLAG_SYSTEM">
+			<synopsis>Raised when you set maintenance.</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/managerEvent[@name='DiscoveryDeregister']/managerEventInstance/syntax/parameter)" />
+		</syntax>
+		</managerEventInstance>
+	</managerEvent>
+ ***/
 
 struct curl_put_data {
 	char *data;
@@ -230,6 +287,8 @@ CURLcode consul_deregister(CURL *curl)
 	if (global_config.debug)
 		ast_log(LOG_NOTICE, "Deregister node %s with url %s\n", global_config.id, url);
 
+	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryDeregister", NULL);
+
 	rcode = curl_easy_perform(curl);
 	curl_slist_free_all(headers);
         ast_free(url);
@@ -276,6 +335,8 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	rcode = curl_easy_perform(curl);
 
+	manager_event(EVENT_FLAG_SYSTEM, "DiscoverySetMaintenance", "Maintenance: %s\n", enable);
+
         ast_json_free(obj);
 	curl_slist_free_all(headers);
 	curl_free(reason);
@@ -321,6 +382,8 @@ CURLcode consul_register(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_READFUNCTION, readData);
 
 	rcode = curl_easy_perform(curl);
+
+	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryRegister", NULL);
 
         ast_json_free(obj);
 	curl_slist_free_all(headers);
@@ -559,6 +622,29 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 	return NULL;
 }
 
+static int manager_maintenance(struct mansession *s, const struct message *m)
+{
+	CURL *curl;
+	CURLcode rcode;
+	const char *enable = astman_get_header(m,"Enable");
+
+	curl = curl_easy_init();
+
+	if (ast_strlen_zero(enable)) {
+		astman_send_error(s, m, "No action to enable or disable specified");
+		return 0;
+	}
+
+	rcode = consul_maintenance_service(curl, enable);
+
+	if (rcode != CURLE_OK)
+                ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+
+	curl_easy_cleanup(curl);
+
+	return RESULT_SUCCESS;
+}
+
 /*! \brief Function called to define CLI */
 static struct ast_cli_entry cli_discovery[] = {
 	AST_CLI_DEFINE(discovery_cli_settings, "Show discovery settings"),
@@ -577,6 +663,7 @@ static int unload_module(void)
 {
 	load_res(0);
 	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+	ast_manager_unregister("DiscoverySetMaintenance");
 	return 0;
 }
 
@@ -595,6 +682,7 @@ static int load_module(void)
 	load_config(0);
 	if (load_res(1) == AST_MODULE_LOAD_SUCCESS) {
 		ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+		ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance);
 		return AST_MODULE_LOAD_SUCCESS;
 	}
 
