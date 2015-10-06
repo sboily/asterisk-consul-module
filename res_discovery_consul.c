@@ -135,7 +135,7 @@ struct curl_put_data {
 	size_t size;
 };
 
-typedef struct discovery_config {
+struct discovery_config {
 	int enabled;
 	int debug;
 	char id[256];
@@ -151,7 +151,7 @@ typedef struct discovery_config {
 	char token[256];
 	int check;
 	int check_http_port;
-} discovery_config;
+};
 
 static struct discovery_config global_config = {
 	.enabled = 1,
