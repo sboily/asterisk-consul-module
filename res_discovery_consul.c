@@ -40,6 +40,7 @@
 
 /*** MODULEINFO
 	<defaultenabled>no</defaultenabled>
+	<depend>curl</depend>
 	<support_level>extended</support_level>
  ***/
 
@@ -685,6 +686,13 @@ static int unload_module(void)
 
 static int load_module(void)
 {
+	if (!ast_module_check("res_curl.so")) {
+		if (ast_load_resource("res_curl.so") != AST_MODULE_LOAD_SUCCESS) {
+			ast_log(LOG_ERROR, "Cannot load res_curl, so res_discovery_consul cannot be loaded\n");
+			return AST_MODULE_LOAD_DECLINE;
+		}
+	}
+
 	load_config(0);
 	if (load_res(1) == AST_MODULE_LOAD_SUCCESS) {
 		ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
