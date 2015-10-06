@@ -1,6 +1,5 @@
 [general]
 enabled=true
-debug=false
 
 [consul]
 id=auto ;set id or auto to generate it

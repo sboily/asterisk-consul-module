@@ -138,7 +138,6 @@ struct curl_put_data {
 
 struct discovery_config {
 	int enabled;
-	int debug;
 	char id[256];
 	char name[256];
 	char host[256];
@@ -156,7 +155,6 @@ struct discovery_config {
 
 static struct discovery_config global_config = {
 	.enabled = 1,
-	.debug = 0,
 	.id = "asterisk",
 	.name = "Asterisk",
 	.host = "127.0.0.1",
@@ -242,10 +240,7 @@ static struct ast_json *consul_put_json(void) {
 		ast_free(url_check);
 	}
 
-	if (global_config.debug) {
-		ast_log(LOG_NOTICE, "The json object created: %s\n",
-			    ast_json_dump_string_format(obj, AST_JSON_COMPACT));
-	}
+	ast_debug(1, "The json object created: %s\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	return ast_json_ref(obj);
 }
@@ -290,9 +285,7 @@ static CURLcode consul_deregister(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
 
-	if (global_config.debug) {
-		ast_log(LOG_NOTICE, "Deregister node %s with url %s\n", global_config.id, url);
-	}
+	ast_debug(1, "Deregister node %s with url %s\n", global_config.id, url);
 
 	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryDeregister", NULL);
 
@@ -407,10 +400,9 @@ static void load_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_variable *v;
 
-	int enabled, debug, check;
+	int enabled, check;
 
 	enabled = 1;
-	debug = 1;
 	check = 1;
 
 	if (!(cfg = ast_config_load(config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
@@ -426,11 +418,6 @@ static void load_config(int reload)
 				enabled = 0;
 			}
 			global_config.enabled = enabled;
-		} else if (!strcasecmp(v->name, "debug")) {
-			if (ast_true(v->value) == 0) {
-				debug = 0;
-			}
-			global_config.debug = debug;
 		}
 	}
 
@@ -488,9 +475,7 @@ static int discovery_ip_address(void)
 	sprintf(host, "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
 	ast_copy_string(global_config.discovery_ip, host, strlen(host) + 1);
 
-	if (global_config.debug) {
-		ast_log(LOG_NOTICE,"Discovery IP: %s\n", host);
-	}
+	ast_debug(1,"Discovery IP: %s\n", host);
 
 	return 0;
 }
@@ -503,9 +488,7 @@ static int discovery_hostname(void)
 	gethostname(hostname, 1024);
 	ast_copy_string(global_config.name, hostname, strlen(hostname) + 1);
 
-	if (global_config.debug) {
-		ast_log(LOG_NOTICE,"Discovery hostname: %s\n", hostname);
-	}
+	ast_debug(1, "Discovery hostname: %s\n", hostname);
 
 	return 0;
 }
@@ -519,9 +502,7 @@ static int generate_uuid_id_consul(void)
 	uuid = ast_uuid_generate_str(uuid_str, sizeof(uuid_str));
 	ast_copy_string(global_config.id, uuid, strlen(uuid) + 1);
 
-	if (global_config.debug) {
-		ast_log(LOG_NOTICE,"Auto ID: %s\n", uuid);
-	}
+	ast_debug(1, "Auto ID: %s\n", uuid);
 
 	return 0;
 }
@@ -573,7 +554,6 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 
 	ast_cli(a->fd, "\n\nGlobal Settings:\n");
 	ast_cli(a->fd, "----------------\n");
-	ast_cli(a->fd, "Debug: %d\n", global_config.debug);
 	ast_cli(a->fd, "ID service: %s\n", global_config.id);
 	ast_cli(a->fd, "Name service: %s\n", global_config.name);
 	ast_cli(a->fd, "Tags service: %s\n\n", global_config.tags);
