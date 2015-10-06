@@ -1,3 +1,10 @@
+res-discovery-consul (0.2.0-1) UNRELEASED; urgency=medium
+
+  * New upstream released.
+  * Add AMI command and AMI events.
+
+ -- Sylvain Boily <sboily@avencall.com>  Tue, 06 Oct 2015 16:13:35 -0400
+
 res-discovery-consul (0.1.0-1) UNRELEASED; urgency=medium
 
   * Initial release.
