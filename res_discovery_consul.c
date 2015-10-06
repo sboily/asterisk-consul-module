@@ -76,6 +76,7 @@
 #include "asterisk/uuid.h"
 #include "asterisk/cli.h"
 #include "asterisk/manager.h"
+#include "asterisk/strings.h"
 
 /*** DOCUMENTATION
 	<configInfo name="res_discovery_consul" language="en_US">
@@ -132,6 +133,8 @@
 	</managerEvent>
  ***/
 
+#define MAX_URL_LENGTH 512
+
 struct curl_put_data {
 	char *data;
 	size_t size;
@@ -146,8 +149,6 @@ struct discovery_config {
 	int discovery_port;
 	char discovery_interface[32];
 	int port;
-	char register_url[256];
-	char deregister_url[256];
 	char tags[256];
 	char token[256];
 	int check;
@@ -163,8 +164,6 @@ static struct discovery_config global_config = {
 	.discovery_port = 5060,
 	.discovery_interface = "eth0",
 	.port = 8500,
-	.register_url = "/v1/agent/service/register",
-	.deregister_url = "/v1/agent/service/deregister",
 	.tags = "asterisk",
 	.token = "",
 	.check = 0,
@@ -266,33 +265,37 @@ static struct curl_slist *set_headers_json(void) {
 	return headers;
 }
 
+static void set_base_url(struct ast_str **str, const char *path)
+{
+	ast_str_set(str, 0, "http://%s:%d%s",global_config.host, global_config.port, path);
+}
+
+
 /*! \brief Function called to deregister via curl on consul */
 static CURLcode consul_deregister(CURL *curl)
 {
 	CURLcode rcode;
 	struct curl_slist *headers;
-	char *url = (char *) malloc(1024);
+	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH);
 
-	sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
-		    global_config.deregister_url, global_config.id);
-
-	if (strcasecmp(global_config.token, "")) {
-		sprintf(url, "%s?token=%s", url, global_config.token);
+	set_base_url(&url, "/v1/agent/service/deregister");
+	ast_str_append(&url, 0, "/%s", global_config.id);
+	if (!ast_strlen_zero(global_config.token)) {
+		ast_str_append(&url, 0, "?token=%s", global_config.token);
 	}
 
 	headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
 
-	ast_debug(1, "Deregister node %s with url %s\n", global_config.id, url);
+	ast_debug(1, "Deregister node %s with url %s\n", global_config.id, ast_str_buffer(url));
 
 	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryDeregister", NULL);
 
 	rcode = curl_easy_perform(curl);
 	curl_slist_free_all(headers);
-	ast_free(url);
 
 	return rcode;
 }
@@ -303,18 +306,16 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	CURLcode rcode;
 	struct curl_put_data put_data = {0,0};
 	struct curl_slist *headers;
-	char *url = (char *) malloc(1024);
-	char maintenance_url[256] = "/v1/agent/service/maintenance/";
+	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH);
 	struct ast_json *obj;
 	char *reason = curl_easy_escape(curl, "Maintenance activated by Asterisk module", 41);
 
 	obj = consul_put_maintenance_json();
 
-	sprintf(url, "http://%s:%d%s%s?enable=%s&reason=%s", global_config.host, global_config.port,
-		    maintenance_url, global_config.id, enable, reason);
-
-	if (strcasecmp(global_config.token, "")) {
-		sprintf(url, "%s&token=%s", url, global_config.token);
+	set_base_url(&url, "/v1/agent/service/maintenance");
+	ast_str_append(&url, 0, "/%s?enable=%s&reason=%s", global_config.id, enable, reason);
+	if (!ast_strlen_zero(global_config.token)) {
+		ast_str_append(&url, 0, "&token=%s", global_config.token);
 	}
 
 	headers = set_headers_json();
@@ -327,7 +328,7 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
 	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.size);
 
@@ -341,7 +342,6 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	ast_json_free(obj);
 	curl_slist_free_all(headers);
 	curl_free(reason);
-	ast_free(url);
 
 	return rcode;
 }
@@ -352,17 +352,15 @@ static CURLcode consul_register(CURL *curl)
 	CURLcode rcode;
 	struct curl_put_data put_data = {0,0};
 	struct curl_slist *headers;
-	char *url = (char *) malloc(1024);
+	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH);
 	struct ast_json *obj;
 
 	headers = set_headers_json();
 	obj = consul_put_json();
 
-	sprintf(url, "http://%s:%d%s", global_config.host, global_config.port,
-			global_config.register_url);
-
-	if (strcasecmp(global_config.token, "")) {
-		sprintf(url, "%s?token=%s", url, global_config.token);
+	set_base_url(&url, "/v1/agent/service/register");
+	if (!ast_strlen_zero(global_config.token)) {
+		ast_str_append(&url, 0, "?token=%s", global_config.token);
 	}
 
 	put_data.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
@@ -373,7 +371,7 @@ static CURLcode consul_register(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
-	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -388,7 +386,6 @@ static CURLcode consul_register(CURL *curl)
 
 	ast_json_free(obj);
 	curl_slist_free_all(headers);
-	ast_free(url);
 
 	return rcode;
 }
@@ -429,10 +426,6 @@ static void load_config(int reload)
 			ast_copy_string(global_config.host, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "port")) {
 			global_config.port = atoi(v->value);
-		} else if (!strcasecmp(v->name, "register_url")) {
-			ast_copy_string(global_config.register_url, v->value, strlen(v->value) + 1);
-		} else if (!strcasecmp(v->name, "deregister_url")) {
-			ast_copy_string(global_config.deregister_url, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "tags")) {
 			ast_copy_string(global_config.tags, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "name")) {
@@ -567,8 +560,6 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	ast_cli(a->fd, "----------------\n");
 	ast_cli(a->fd, "Connection: %s:%d\n", global_config.host, global_config.port);
 	ast_cli(a->fd, "Token: %s\n", global_config.token);
-	ast_cli(a->fd, "URL register: %s\n", global_config.register_url);
-	ast_cli(a->fd, "URL deregister: %s\n", global_config.deregister_url);
 	ast_cli(a->fd, "Check: %d\n", global_config.check);
 	ast_cli(a->fd, "Check http port: %d\n\n", global_config.check_http_port);
 	ast_cli(a->fd, "----\n");
