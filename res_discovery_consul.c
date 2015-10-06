@@ -509,10 +509,8 @@ static int load_res(int start)
 	CURLcode rcode;
 
 	curl = curl_easy_init();
-
-	if (global_config.enabled == 0) {
-		ast_log(LOG_NOTICE, "This module is disabled\n");
-		return AST_MODULE_LOAD_DECLINE;
+	if (!curl) {
+		return -1;
 	}
 
 	if (start == 1) {
@@ -527,7 +525,7 @@ static int load_res(int start)
  
 	curl_easy_cleanup(curl);
 
-	return AST_MODULE_LOAD_SUCCESS;
+	return 0;
 }
 
 /*! \brief Function called to exec CLI */
@@ -663,14 +661,19 @@ static int load_module(void)
 	}
 
 	load_config(0);
-	if (load_res(1) == AST_MODULE_LOAD_SUCCESS) {
-		ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
-		ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance);
-		return AST_MODULE_LOAD_SUCCESS;
+
+	if (global_config.enabled == 0) {
+		ast_log(LOG_NOTICE, "This module is disabled\n");
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
+	if (load_res(1)) {
+		return AST_MODULE_LOAD_DECLINE;
+	}
 
-	return AST_MODULE_LOAD_DECLINE;
+	ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+	ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance);
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Discovery CONSUL",
