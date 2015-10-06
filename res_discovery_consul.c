@@ -57,6 +57,8 @@
  * 
  */
 
+#include "asterisk.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -68,7 +70,6 @@
 #include <arpa/inet.h>
 #include <curl/curl.h>
 
-#include "asterisk.h"
 #include "asterisk/module.h"
 #include "asterisk/config.h"
 #include "asterisk/json.h"
