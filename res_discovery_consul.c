@@ -173,16 +173,16 @@ static struct discovery_config global_config = {
 
 static const char config_file[] = "res_discovery_consul.conf";
 
-size_t readData(char *ptr, size_t size, size_t nmemb, void* data);
-CURLcode consul_deregister(CURL *curl);
-CURLcode consul_register(CURL *curl);
-CURLcode consul_maintenance_service(CURL *curl, const char *enable);
+static size_t readData(char *ptr, size_t size, size_t nmemb, void* data);
+static CURLcode consul_deregister(CURL *curl);
+static CURLcode consul_register(CURL *curl);
+static CURLcode consul_maintenance_service(CURL *curl, const char *enable);
 static int discovery_ip_address(void);
 static int discovery_hostname(void);
 static int generate_uuid_id_consul(void);
 
 /*! \brief Function called to read data and inject it on PUT */
-size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
+static size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 {
 	size_t realsize = size * nmemb;
 	if (realsize < 1) {
@@ -270,7 +270,7 @@ static struct curl_slist *set_headers_json(void) {
 }
 
 /*! \brief Function called to deregister via curl on consul */
-CURLcode consul_deregister(CURL *curl)
+static CURLcode consul_deregister(CURL *curl)
 {
 	CURLcode rcode;
 	struct curl_slist *headers;
@@ -304,7 +304,7 @@ CURLcode consul_deregister(CURL *curl)
 }
 
 /*! \brief Function called to deregister via curl on consul */
-CURLcode consul_maintenance_service(CURL *curl, const char *enable)
+static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 {
 	CURLcode rcode;
 	struct curl_put_data putData = {0,0};
@@ -354,7 +354,7 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 }
 
 /*! \brief Function called to register via curl on consul */
-CURLcode consul_register(CURL *curl)
+static CURLcode consul_register(CURL *curl)
 {
 	CURLcode rcode;
 	struct curl_put_data putData = {0,0};
