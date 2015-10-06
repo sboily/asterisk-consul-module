@@ -185,8 +185,9 @@ static int generate_uuid_id_consul(void);
 size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 {
 	size_t realsize = size * nmemb;
-	if(realsize < 1)
+	if (realsize < 1) {
 		return 0;
+	}
 
 	struct curl_put_data* mem = (struct curl_put_data*) data;
 	if (mem->size > 0) {
@@ -212,14 +213,17 @@ static struct ast_json *consul_put_json(void) {
 	if (!tags) {return NULL;}
 	if (!check) {return NULL;}
 
-	if (!strcasecmp(global_config.discovery_ip, "auto"))
+	if (!strcasecmp(global_config.discovery_ip, "auto")) {
 		discovery_ip_address();
+	}
 
-	if (!strcasecmp(global_config.name, "auto"))
+	if (!strcasecmp(global_config.name, "auto")) {
 		discovery_hostname();
+	}
 
-	if (!strcasecmp(global_config.id, "auto"))
+	if (!strcasecmp(global_config.id, "auto")) {
 		generate_uuid_id_consul();
+	}
 
 	ast_json_object_set(obj, "ID", ast_json_string_create(global_config.id));
 	ast_json_object_set(obj, "Name", ast_json_string_create(global_config.name));
@@ -237,9 +241,10 @@ static struct ast_json *consul_put_json(void) {
 		ast_free(url_check);
 	}
 
-	if (global_config.debug)
+	if (global_config.debug) {
 		ast_log(LOG_NOTICE, "The json object created: %s\n",
 			    ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	}
 
 	return ast_json_ref(obj);
 }
@@ -274,8 +279,9 @@ CURLcode consul_deregister(CURL *curl)
 	sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
 		    global_config.deregister_url, global_config.id);
 
-	if (strcasecmp(global_config.token, ""))
+	if (strcasecmp(global_config.token, "")) {
 		sprintf(url, "%s?token=%s", url, global_config.token);
+	}
 
 	headers = set_headers_json();
 
@@ -284,8 +290,9 @@ CURLcode consul_deregister(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
 
-	if (global_config.debug)
+	if (global_config.debug) {
 		ast_log(LOG_NOTICE, "Deregister node %s with url %s\n", global_config.id, url);
+	}
 
 	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryDeregister", NULL);
 
@@ -312,8 +319,9 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	sprintf(url, "http://%s:%d%s%s?enable=%s&reason=%s", global_config.host, global_config.port,
 		    maintenance_url, global_config.id, enable, reason);
 
-	if (strcasecmp(global_config.token, ""))
+	if (strcasecmp(global_config.token, "")) {
 		sprintf(url, "%s&token=%s", url, global_config.token);
+	}
 
 	headers = set_headers_json();
 
@@ -360,8 +368,9 @@ CURLcode consul_register(CURL *curl)
 	sprintf(url, "http://%s:%d%s", global_config.host, global_config.port,
 			global_config.register_url);
 
-	if (strcasecmp(global_config.token, ""))
+	if (strcasecmp(global_config.token, "")) {
 		sprintf(url, "%s?token=%s", url, global_config.token);
+	}
 
 	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
@@ -415,12 +424,14 @@ static void load_config(int reload)
 
 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {
 		if (!strcasecmp(v->name, "enabled")) {
-			if (ast_true(v->value) == 0)
+			if (ast_true(v->value) == 0) {
 				enabled = 0;
+			}
 			global_config.enabled = enabled;
 		} else if (!strcasecmp(v->name, "debug")) {
-			if (ast_true(v->value) == 0)
+			if (ast_true(v->value) == 0) {
 				debug = 0;
+			}
 			global_config.debug = debug;
 		}
 	}
@@ -449,8 +460,9 @@ static void load_config(int reload)
 		} else if (!strcasecmp(v->name, "token")) {
 			ast_copy_string(global_config.token, v->value, strlen(v->value) + 1);
 		} else if (!strcasecmp(v->name, "check")) {
-			if (ast_true(v->value) == 0)
+			if (ast_true(v->value) == 0) {
 				check = 0;
+			}
 			global_config.check = check;
 		} else if (!strcasecmp(v->name, "check_http_port")) {
 			global_config.check_http_port =  atoi(v->value);
@@ -478,8 +490,9 @@ static int discovery_ip_address(void)
 	sprintf(host, "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
 	ast_copy_string(global_config.discovery_ip, host, strlen(host) + 1);
 
-	if (global_config.debug)
+	if (global_config.debug) {
 		ast_log(LOG_NOTICE,"Discovery IP: %s\n", host);
+	}
 
 	return 0;
 }
@@ -492,8 +505,9 @@ static int discovery_hostname(void)
 	gethostname(hostname, 1024);
 	ast_copy_string(global_config.name, hostname, strlen(hostname) + 1);
 
-	if (global_config.debug)
+	if (global_config.debug) {
 		ast_log(LOG_NOTICE,"Discovery hostname: %s\n", hostname);
+	}
 
 	return 0;
 }
@@ -507,8 +521,9 @@ static int generate_uuid_id_consul(void)
 	uuid = ast_uuid_generate_str(uuid_str, sizeof(uuid_str));
 	ast_copy_string(global_config.id, uuid, strlen(uuid) + 1);
 
-	if (global_config.debug)
+	if (global_config.debug) {
 		ast_log(LOG_NOTICE,"Auto ID: %s\n", uuid);
+	}
 
 	return 0;
 }
@@ -533,8 +548,9 @@ static int load_res(int start)
 		rcode = consul_deregister(curl);
 	}
 
-	if(rcode != CURLE_OK)
+	if (rcode != CURLE_OK) {
 		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+	}
  
 	curl_easy_cleanup(curl);
 
@@ -614,8 +630,9 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 		ast_cli(a->fd, "Maintenance mode for service %s is unset\n", global_config.id);
 	}
 
-	if (rcode != CURLE_OK)
+	if (rcode != CURLE_OK) {
 		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+	}
  
 	curl_easy_cleanup(curl);
 
@@ -637,8 +654,9 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 
 	rcode = consul_maintenance_service(curl, enable);
 
-	if (rcode != CURLE_OK)
+	if (rcode != CURLE_OK) {
 		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+	}
 
 	curl_easy_cleanup(curl);
 
