@@ -173,7 +173,7 @@ static struct discovery_config global_config = {
 
 static const char config_file[] = "res_discovery_consul.conf";
 
-static size_t readData(char *ptr, size_t size, size_t nmemb, void* data);
+static size_t read_data(char *ptr, size_t size, size_t nmemb, void* data);
 static CURLcode consul_deregister(CURL *curl);
 static CURLcode consul_register(CURL *curl);
 static CURLcode consul_maintenance_service(CURL *curl, const char *enable);
@@ -182,7 +182,7 @@ static int discovery_hostname(void);
 static int generate_uuid_id_consul(void);
 
 /*! \brief Function called to read data and inject it on PUT */
-static size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
+static size_t read_data(char *ptr, size_t size, size_t nmemb, void* data)
 {
 	size_t realsize = size * nmemb;
 	if (realsize < 1) {
@@ -307,7 +307,7 @@ static CURLcode consul_deregister(CURL *curl)
 static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 {
 	CURLcode rcode;
-	struct curl_put_data putData = {0,0};
+	struct curl_put_data put_data = {0,0};
 	struct curl_slist *headers;
 	char *url = (char *) malloc(1024);
 	char maintenance_url[256] = "/v1/agent/service/maintenance/";
@@ -325,10 +325,10 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	headers = set_headers_json();
 
-	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
+	put_data.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+	memcpy(put_data.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
 		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	putData.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -336,10 +336,10 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
-	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) putData.size);
+	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.size);
 
-	curl_easy_setopt(curl, CURLOPT_READDATA, (void *) &putData);
-	curl_easy_setopt(curl, CURLOPT_READFUNCTION, readData);
+	curl_easy_setopt(curl, CURLOPT_READDATA, (void *) &put_data);
+	curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_data);
 
 	rcode = curl_easy_perform(curl);
 
@@ -357,7 +357,7 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 static CURLcode consul_register(CURL *curl)
 {
 	CURLcode rcode;
-	struct curl_put_data putData = {0,0};
+	struct curl_put_data put_data = {0,0};
 	struct curl_slist *headers;
 	char *url = (char *) malloc(1024);
 	struct ast_json *obj;
@@ -372,10 +372,10 @@ static CURLcode consul_register(CURL *curl)
 		sprintf(url, "%s?token=%s", url, global_config.token);
 	}
 
-	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
+	put_data.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+	memcpy(put_data.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
 		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	putData.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -385,10 +385,10 @@ static CURLcode consul_register(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) putData.size);
+	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.size);
 
-	curl_easy_setopt(curl, CURLOPT_READDATA, (void *) &putData);
-	curl_easy_setopt(curl, CURLOPT_READFUNCTION, readData);
+	curl_easy_setopt(curl, CURLOPT_READDATA, (void *) &put_data);
+	curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_data);
 
 	rcode = curl_easy_perform(curl);
 
