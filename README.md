@@ -69,6 +69,13 @@ To build image to test with docker.
     docker run -it asterisk-consul bash
     asterisk
 
+UDP issue
+---------
+
+If you have UDP issue run this command.
+
+    docker run --net=host --privileged --rm cap10morgan/conntrack -D -p udp
+
 Docker-compose
 --------------
 
