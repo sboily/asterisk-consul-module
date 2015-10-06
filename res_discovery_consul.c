@@ -137,19 +137,19 @@ struct curl_put_data {
 
 typedef struct discovery_config {
 	int enabled;
-        int debug;
-        char id[256];
-        char name[256];
-        char host[256];
-        char discovery_ip[16];
-        int discovery_port;
-        char discovery_interface[32];
-        int port;
-        char register_url[256];
-        char deregister_url[256];
-        char tags[256];
-        char token[256];
-        int check;
+	int debug;
+	char id[256];
+	char name[256];
+	char host[256];
+	char discovery_ip[16];
+	int discovery_port;
+	char discovery_interface[32];
+	int port;
+	char register_url[256];
+	char deregister_url[256];
+	char tags[256];
+	char token[256];
+	int check;
 	int check_http_port;
 } discovery_config;
 
@@ -157,7 +157,7 @@ static struct discovery_config global_config = {
 	.enabled = 1,
 	.debug = 0,
 	.id = "asterisk",
-        .name = "Asterisk",
+	.name = "Asterisk",
 	.host = "127.0.0.1",
 	.discovery_ip = "127.0.0.1",
 	.discovery_port = 5060,
@@ -203,8 +203,8 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 /*! \brief Function called to create json object for curl */
 static struct ast_json *consul_put_json(void) {
 	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
-        RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_unref);
-        RAII_VAR(struct ast_json *, check, ast_json_object_create(), ast_json_unref);
+	RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_unref);
+	RAII_VAR(struct ast_json *, check, ast_json_object_create(), ast_json_unref);
 
 	char *url_check = (char *) malloc(1024);
 
@@ -239,7 +239,7 @@ static struct ast_json *consul_put_json(void) {
 
 	if (global_config.debug)
 		ast_log(LOG_NOTICE, "The json object created: %s\n",
-			ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+			    ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	return ast_json_ref(obj);
 }
@@ -271,13 +271,13 @@ CURLcode consul_deregister(CURL *curl)
 	struct curl_slist *headers;
 	char *url = (char *) malloc(1024);
 
-        sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
-				          global_config.deregister_url, global_config.id);
+	sprintf(url, "http://%s:%d%s/%s", global_config.host, global_config.port,
+		    global_config.deregister_url, global_config.id);
 
 	if (strcasecmp(global_config.token, ""))
 		sprintf(url, "%s?token=%s", url, global_config.token);
 
-        headers = set_headers_json();
+	headers = set_headers_json();
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -291,7 +291,7 @@ CURLcode consul_deregister(CURL *curl)
 
 	rcode = curl_easy_perform(curl);
 	curl_slist_free_all(headers);
-        ast_free(url);
+	ast_free(url);
 
 	return rcode;
 }
@@ -309,17 +309,17 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	obj = consul_put_maintenance_json();
 
-        sprintf(url, "http://%s:%d%s%s?enable=%s&reason=%s", global_config.host, global_config.port,
-				          maintenance_url, global_config.id, enable, reason);
+	sprintf(url, "http://%s:%d%s%s?enable=%s&reason=%s", global_config.host, global_config.port,
+		    maintenance_url, global_config.id, enable, reason);
 
 	if (strcasecmp(global_config.token, ""))
 		sprintf(url, "%s&token=%s", url, global_config.token);
 
-        headers = set_headers_json();
+	headers = set_headers_json();
 
 	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
-                                                         strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	putData.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
@@ -337,10 +337,10 @@ CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	manager_event(EVENT_FLAG_SYSTEM, "DiscoverySetMaintenance", "Maintenance: %s\n", enable);
 
-        ast_json_free(obj);
+	ast_json_free(obj);
 	curl_slist_free_all(headers);
 	curl_free(reason);
-        ast_free(url);
+	ast_free(url);
 
 	return rcode;
 }
@@ -354,18 +354,18 @@ CURLcode consul_register(CURL *curl)
 	char *url = (char *) malloc(1024);
 	struct ast_json *obj;
 
-        headers = set_headers_json();
+	headers = set_headers_json();
 	obj = consul_put_json();
 
-        sprintf(url, "http://%s:%d%s", global_config.host, global_config.port,
-				       global_config.register_url);
+	sprintf(url, "http://%s:%d%s", global_config.host, global_config.port,
+			global_config.register_url);
 
 	if (strcasecmp(global_config.token, ""))
 		sprintf(url, "%s?token=%s", url, global_config.token);
 
 	putData.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(putData.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
-                                                         strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	putData.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
 	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
@@ -385,9 +385,9 @@ CURLcode consul_register(CURL *curl)
 
 	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryRegister", NULL);
 
-        ast_json_free(obj);
+	ast_json_free(obj);
 	curl_slist_free_all(headers);
-        ast_free(url);
+	ast_free(url);
 
 	return rcode;
 }
@@ -422,8 +422,8 @@ static void load_config(int reload)
 			if (ast_true(v->value) == 0)
 				debug = 0;
 			global_config.debug = debug;
-                }
-        }
+		}
+	}
 
 	for (v = ast_variable_browse(cfg, "consul"); v; v = v->next) {
 		if (!strcasecmp(v->name, "id")) {
@@ -527,14 +527,14 @@ static int load_res(int start)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-        if (start == 1) {
-        	rcode = consul_register(curl);
-        } else {
-        	rcode = consul_deregister(curl);
-        }
+	if (start == 1) {
+		rcode = consul_register(curl);
+	} else {
+		rcode = consul_deregister(curl);
+	}
 
 	if(rcode != CURLE_OK)
-                ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
  
 	curl_easy_cleanup(curl);
 
@@ -551,7 +551,7 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 			"Usage: discovery show settings\n"
 			"       Get the settings of discovery service.\n\n"
 			"       Example:\n"
-			"           discovery show settings\n";
+			"	    discovery show settings\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -615,7 +615,7 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 	}
 
 	if (rcode != CURLE_OK)
-                ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
  
 	curl_easy_cleanup(curl);
 
@@ -638,7 +638,7 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 	rcode = consul_maintenance_service(curl, enable);
 
 	if (rcode != CURLE_OK)
-                ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
 
 	curl_easy_cleanup(curl);
 
