@@ -320,7 +320,7 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	headers = set_headers_json();
 
-	put_data.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+	put_data.data = ast_malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(put_data.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
 		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
@@ -363,7 +363,7 @@ static CURLcode consul_register(CURL *curl)
 		ast_str_append(&url, 0, "?token=%s", global_config.token);
 	}
 
-	put_data.data = (char *) malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
+	put_data.data = ast_malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	memcpy(put_data.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
 		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
