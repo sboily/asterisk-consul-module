@@ -286,7 +286,6 @@ static CURLcode consul_deregister(CURL *curl)
 
 	headers = set_headers_json();
 
-	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
@@ -331,7 +330,6 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
-	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -378,7 +376,6 @@ static CURLcode consul_register(CURL *curl)
 		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
 	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
 
-	curl_easy_setopt(curl, CURLOPT_VERBOSE, global_config.debug);
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
