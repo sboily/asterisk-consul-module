@@ -99,3 +99,4 @@ Schema
 ------
 
 ![Asterisk Consul screenshot](/contribs/images/asterisk-consul.png?raw=true "Asterisk Consul")
+![Asterisk Consul Kamailio screenshot](/contribs/images/asterisk-consul-kamailio.png?raw=true "Asterisk Consul Kamailio")
