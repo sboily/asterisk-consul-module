@@ -206,8 +206,6 @@ static struct ast_json *consul_put_json(void) {
 	RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_unref);
 	RAII_VAR(struct ast_json *, check, ast_json_object_create(), ast_json_unref);
 
-	char *url_check = (char *) malloc(1024);
-
 	if (!obj) {return NULL;}
 	if (!tags) {return NULL;}
 	if (!check) {return NULL;}
@@ -233,11 +231,13 @@ static struct ast_json *consul_put_json(void) {
 	ast_json_array_append(tags, ast_json_string_create(global_config.tags));
 
 	if (global_config.check == 1) {
-		sprintf(url_check, "http://%s:%d/httpstatus", global_config.discovery_ip, global_config.check_http_port);
+		char url_check[MAX_URL_LENGTH];
+
+		snprintf(url_check, sizeof(url_check), "http://%s:%d/httpstatus",
+				global_config.discovery_ip, global_config.check_http_port);
 		ast_json_object_set(obj, "Check", ast_json_ref(check));
 		ast_json_object_set(check, "Http", ast_json_string_create(url_check));
 		ast_json_object_set(check, "Interval", ast_json_string_create("15s"));
-		ast_free(url_check);
 	}
 
 	ast_debug(1, "The json object created: %s\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT));
