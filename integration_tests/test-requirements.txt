@@ -3,3 +3,4 @@ nose
 python-consul
 pyhamcrest
 docker-compose==1.4.2
+requests>=2.6.1,<2.7
