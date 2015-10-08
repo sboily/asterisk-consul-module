@@ -1,0 +1,20 @@
+Source: res-discovery-consul
+Priority: extra
+Maintainer: Sylvain Boily <sboily@avencall.com>
+Build-Depends: debhelper (>= 7.0.50~), asterisk-dev (>= 13.5.0)
+Standards-Version: 3.8.4
+Section: comm
+
+Package: res-discovery-consul
+Section: comm
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, asterisk (>= 13.5.0), libcurl
+Description: Module to discovering Asterisk with Consul
+ Module to discovering Asterisk with Consul
+
+Package: res-discovery-consul-dbg
+Section: comm
+Architecture: any
+Depends: res-discovery-consul (= ${Source-Version})
+Description: Module to discovering Asterisk with Consul
+ Module to discovering Asterisk with Consul, debug mode

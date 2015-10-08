@@ -1,15 +1,15 @@
 [general]
 enabled=true
-debug=false
 
 [consul]
 id=auto ;set id or auto to generate it
 name=asterisk ;set name or auto to discovery with hostname
 host=consul
 port=8500
-register_url=/v1/agent/service/register
-deregister_url=/v1/agent/service/deregister
+token=the_one_ring
 tags=asterisk
 discovery_ip=auto ;set ip or auto to discovery the ip
 discovery_port=5060
 discovery_interface=eth0 ;only use if discovery_ip is auto
+check=true
+check_http_port=8888

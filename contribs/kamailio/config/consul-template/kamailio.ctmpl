@@ -1,0 +1,2 @@
+{{range service "asterisk"}}
+1 sip:{{.Address}}:{{.Port}}{{end}}

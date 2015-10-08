@@ -20,3 +20,17 @@ lb:
   expose:
     - "8888"
     - "1936"
+kamailio:
+  build: ./contribs/kamailio
+  links:
+    - consul
+    - asterisk
+  ports:
+    - "5060:5060/udp"
+  expose:
+    - 5060/udp
+phone:
+  build: ./contribs/linphone
+  links:
+    - asterisk
+    - kamailio
