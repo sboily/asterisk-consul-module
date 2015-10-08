@@ -17,11 +17,16 @@
 
 import os
 import time
+import subprocess
+import logging
 
 from consul import Consul
 from hamcrest import assert_that, not_
 from xivo_test_helpers.asset_launching_test_case import AssetLaunchingTestCase
+from docker import Client
 
+
+logger = logging.getLogger(__name__)
 
 class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
 
@@ -48,6 +53,11 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
 
         assert_that(not_(registered), 'asterisk should not be registered on consul')
 
+    def test_that_asterisk_has_maintenance_mode(self):
+        maintenance = self._set_asterisk_in_maintenance_mode()
+
+        registred = self._is_asterisk_is_maintenance_mode_in_consul()
+
     def _is_asterisk_registered_to_consul(self):
         consul = Consul('localhost', '8500', 'the_one_ring')
 
@@ -63,3 +73,34 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
             time.sleep(1)
 
         return False
+
+    def _is_asterisk_is_maintenance_mode_in_consul(self):
+        consul = Consul('localhost', '8500', 'the_one_ring')
+
+        status = self.service_status('asterisk')
+        ip_address = status[0]['NetworkSettings']['IPAddress']
+
+        services = consul.health.state('passing')
+        print services
+        services = consul.health.state('critical')
+        print services
+        return services
+
+    def _set_asterisk_in_maintenance_mode(self):
+        asterisk_cmd = "/usr/sbin/asterisk -rx 'discovery set maintenance on'"
+        service_id = self.service_status('asterisk')[0]['Id']
+        maintenance = self._run_cmd_cli(service_id, asterisk_cmd)
+        print maintenance
+        return maintenance
+
+    def _unset_asterisk_in_maintenance_mode(self):
+        return False
+
+
+    @staticmethod
+    def _run_cmd_cli(container, cmd):
+        c = Client(base_url='unix://var/run/docker.sock')
+        id = c.exec_create(container, cmd)
+        exec_id = c.exec_inspect(id)
+        out = c.exec_start(exec_id, stream=False)
+        return out
