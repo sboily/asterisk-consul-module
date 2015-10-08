@@ -138,7 +138,7 @@ size_t readData(char *ptr, size_t size, size_t nmemb, void* data)
 /*! \brief Function called to create json object for curl */
 static struct ast_json *consul_put_json(void) {
 	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
-	RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_unref);
+        RAII_VAR(struct ast_json *, tags, ast_json_array_create(), ast_json_ref);
 
 	if (!obj) {
 		return NULL;
