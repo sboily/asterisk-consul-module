@@ -1,0 +1,5 @@
+xivo-test-helpers
+nose
+python-consul
+pyhamcrest
+docker-compose==1.4.2

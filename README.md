@@ -59,3 +59,14 @@ Consul webi (token: the_one_ring)
 ARI interface (xivo/xivo)
 
     http://your_ip:8888/ari
+
+
+Integration Tests
+-----------------
+
+To execute the integration tests
+
+    cd integration_tests
+    pip install -r test-requirements.txt
+    make test-setup
+    make test

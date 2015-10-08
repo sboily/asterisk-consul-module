@@ -1,0 +1,19 @@
+consul:
+  image: progrium/consul
+  ports:
+    - "8500:8500"
+  command: -server -bootstrap -ui-dir /ui
+sync:
+  image: n3llyb0y/wait
+  links:
+    - asterisk
+    - consul
+  environment:
+    PORTS: "8500 8888"
+asterisk:
+  build: ../../../
+  dockerfile: Dockerfile
+  links:
+    - consul
+  expose:
+    - 8888
