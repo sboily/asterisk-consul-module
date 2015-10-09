@@ -34,15 +34,6 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
     assets_root = os.path.join(os.path.dirname(__file__), '..', 'assets')
     asset = 'service_discovery'
 
-    @classmethod
-    def setUpClass(cls):
-        cls._force_rebuild_image()
-        cls.launch_service_with_asset()
-
-    @classmethod
-    def _force_rebuild_image(cls):
-        cls._run_cmd('docker-compose build --no-cache')
-
     def stop_service(self, service):
         self._run_cmd('docker-compose stop {}'.format(service))
         while True:
@@ -63,9 +54,14 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
         assert_that(not_(registered), 'asterisk should not be registered on consul')
 
     def test_that_asterisk_has_maintenance_mode(self):
-        maintenance = self._set_asterisk_in_maintenance_mode()
+        maintenance = self._set_unset_asterisk_in_maintenance_mode("on")
 
-        registred = self._is_asterisk_is_maintenance_mode_in_consul()
+        assert_that(maintenance, 'asterisk should be in maintenance state on consul')
+
+	time.sleep(1)
+        maintenance = self._set_unset_asterisk_in_maintenance_mode("off")
+
+        assert_that(not_(maintenance), 'asterisk should not be in maintenance state on consul')
 
     def _is_asterisk_registered_to_consul(self):
         consul = Consul('localhost', '8500', 'the_one_ring')
@@ -74,7 +70,7 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
         ip_address = status[0]['NetworkSettings']['IPAddress']
 
         start = time.time()
-        while time.time() - start < 5:
+        while time.time() - start < 2:
             services = consul.agent.services()
             for index, service in services.iteritems():
                 if service['Service'] == 'asterisk' and service['Address'] == ip_address:
@@ -88,28 +84,27 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
 
         status = self.service_status('asterisk')
         ip_address = status[0]['NetworkSettings']['IPAddress']
-
-        services = consul.health.state('passing')
-        print services
         services = consul.health.state('critical')
-        print services
-        return services
 
-    def _set_asterisk_in_maintenance_mode(self):
-        asterisk_cmd = "/usr/sbin/asterisk -rx 'discovery set maintenance on'"
+        if len(services[1]) > 1:
+            return services[1][1]['ServiceID']
+
+        return None
+
+    def _set_unset_asterisk_in_maintenance_mode(self, mode):
+        asterisk_cmd = "asterisk -rx 'discovery set maintenance {}'".format(mode)
         service_id = self.service_status('asterisk')[0]['Id']
         maintenance = self._run_cmd_cli(service_id, asterisk_cmd)
-        print maintenance
-        return maintenance
-
-    def _unset_asterisk_in_maintenance_mode(self):
+	maintenance_id = maintenance.split(' ')[4]
+        check_id = self._is_asterisk_is_maintenance_mode_in_consul()
+        if maintenance_id == check_id:
+            return True
         return False
-
 
     @staticmethod
     def _run_cmd_cli(container, cmd):
         c = Client(base_url='unix://var/run/docker.sock')
-        id = c.exec_create(container, cmd)
-        exec_id = c.exec_inspect(id)
-        out = c.exec_start(exec_id, stream=False)
+        exec_id = c.exec_create(container, cmd)
+        time.sleep(5)
+        out = c.exec_start(exec_id)
         return out
