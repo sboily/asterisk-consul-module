@@ -1,0 +1,5 @@
+*.pyc
+.git
+.tox
+debian
+*.so
