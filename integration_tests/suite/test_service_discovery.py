@@ -29,6 +29,15 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
     assets_root = os.path.join(os.path.dirname(__file__), '..', 'assets')
     asset = 'service_discovery'
 
+    @classmethod
+    def setUpClass(cls):
+        cls._force_rebuild_image()
+        cls.launch_service_with_asset()
+
+    @classmethod
+    def _force_rebuild_image(cls):
+        cls._run_cmd('docker-compose build --no-cache')
+
     def stop_service(self, service):
         self._run_cmd('docker-compose stop {}'.format(service))
         while True:
@@ -55,7 +64,7 @@ class ConsulModuleIntegrationTests(AssetLaunchingTestCase):
         ip_address = status[0]['NetworkSettings']['IPAddress']
 
         start = time.time()
-        while time.time() - start < 10:
+        while time.time() - start < 5:
             services = consul.agent.services()
             for index, service in services.iteritems():
                 if service['Service'] == 'asterisk' and service['Address'] == ip_address:
