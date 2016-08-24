@@ -3,7 +3,7 @@
  *
  * Copyright (C) <2015>, Sylvain Boily
  *
- * Sylvain Boily <sboily@avencall.com>
+ * Sylvain Boily <sylvainboilydroid@gmail.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
