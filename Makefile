@@ -15,13 +15,9 @@ CONFNAME = $(basename $(SAMPLENAME))
 TARGET = res_discovery_consul.so
 OBJECTS = res_discovery_consul.o
 CFLAGS += -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Winit-self -Wmissing-format-attribute \
-          -Wformat=2 -g -fPIC -D_GNU_SOURCE -D'AST_MODULE="res_discovery_consul"' 
+          -Wformat=2 -g -fPIC -D_GNU_SOURCE -D'AST_MODULE="res_discovery_consul"' -D'AST_MODULE_SELF_SYM=__internal_res_discovery_consul_self'
 LIBS += -lcurl
 LDFLAGS = -Wall -shared
-
-ifdef VERSION
-	CFLAGS += -D'VERSION="$(VERSION)"'
-endif
 
 .PHONY: install clean
 
