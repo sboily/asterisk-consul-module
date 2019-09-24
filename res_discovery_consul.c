@@ -586,16 +586,18 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 		return NULL;
 	}
 
-	if (a->argc != e->args) {
+	if (a->argc != 4) {
 		return CLI_SHOWUSAGE;
 	}
 
-	if (!strncasecmp(a->argv[e->args - 1], "on", 2)) {
+	if (ast_true(a->argv[3])) {
 		rcode = consul_maintenance_service(curl, "true");
 		ast_cli(a->fd, "Maintenance mode for service %s is set\n", global_config.id);
-	} else if (!strncasecmp(a->argv[e->args - 1], "off", 3)) {
+	} else if (ast_false(a->argv[3])) {
 		rcode = consul_maintenance_service(curl, "false");
 		ast_cli(a->fd, "Maintenance mode for service %s is unset\n", global_config.id);
+	} else {
+		return CLI_SHOWUSAGE;
 	}
 
 	if (rcode != CURLE_OK) {
