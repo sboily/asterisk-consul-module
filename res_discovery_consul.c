@@ -1,9 +1,9 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) <2015>, Sylvain Boily
+ * Copyright (C) <2015-2019>, Sylvain Boily
  *
- * Sylvain Boily <sylvainboilydroid@gmail.com>
+ * Sylvain Boily <sylvain@wazo.io>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -23,7 +23,7 @@
  *
  * \brief Consul discovery module ressource
  *
- * \author\verbatim Sylvain Boily <sboily@avencall.com> \endverbatim
+ * \author\verbatim Sylvain Boily <sylvain@wazo.io> \endverbatim
  *
  * This is a resource to discovery an Asterisk application via Consul
  * \ingroup applications
