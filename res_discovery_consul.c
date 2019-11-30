@@ -578,8 +578,6 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 	CURL *curl;
 	CURLcode rcode;
 
-	curl = curl_easy_init();
-
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "discovery set maintenance {on|off}";
@@ -593,22 +591,27 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 		return NULL;
 	}
 
-	if (a->argc != e->args) {
+	if (a->argc != 4) {
 		return CLI_SHOWUSAGE;
 	}
 
-	if (!strncasecmp(a->argv[e->args - 1], "on", 2)) {
+	curl = curl_easy_init();
+
+	if (ast_true(a->argv[3])) {
 		rcode = consul_maintenance_service(curl, "true");
 		ast_cli(a->fd, "Maintenance mode for service %s is set\n", global_config.id);
-	} else if (!strncasecmp(a->argv[e->args - 1], "off", 3)) {
+	} else if (ast_false(a->argv[3])) {
 		rcode = consul_maintenance_service(curl, "false");
 		ast_cli(a->fd, "Maintenance mode for service %s is unset\n", global_config.id);
+	} else {
+		curl_easy_cleanup(curl);
+		return CLI_SHOWUSAGE;
 	}
 
 	if (rcode != CURLE_OK) {
 		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
 	}
- 
+
 	curl_easy_cleanup(curl);
 
 	return NULL;
@@ -620,12 +623,12 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 	CURLcode rcode;
 	const char *enable = astman_get_header(m,"Enable");
 
-	curl = curl_easy_init();
-
 	if (ast_strlen_zero(enable)) {
 		astman_send_error(s, m, "No action to enable or disable specified");
 		return 0;
 	}
+
+	curl = curl_easy_init();
 
 	rcode = consul_maintenance_service(curl, enable);
 
