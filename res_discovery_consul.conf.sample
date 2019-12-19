@@ -2,7 +2,7 @@
 enabled=true
 
 [consul]
-id=auto ;set id or auto to generate it
+id=auto ;set id or auto to generate it, or asterisk to use the asterisk ID
 name=asterisk ;set name or auto to discovery with hostname
 host=consul
 port=8500
