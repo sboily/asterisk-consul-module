@@ -293,6 +293,7 @@ static CURLcode consul_deregister(CURL *curl)
 
 	headers = set_headers_json();
 
+	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
