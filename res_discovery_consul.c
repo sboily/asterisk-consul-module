@@ -225,6 +225,8 @@ static struct ast_json *consul_put_json(void) {
 
 	if (!strcasecmp(global_config.id, "auto")) {
 		generate_uuid_id_consul();
+	} else if (!strcasecmp(global_config.id, "asterisk")) {
+		ast_copy_string(global_config.id, eid, strlen(eid) + 1);
 	}
 
 	ast_json_object_set(obj, "ID", ast_json_string_create(global_config.id));
