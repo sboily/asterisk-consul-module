@@ -1,9 +1,9 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) <2015-2019>, Sylvain Boily
+ * Copyright (C) <2015-2015>, Sylvain Boily
  *
- * Sylvain Boily <sylvain@wazo.io>
+ * Sylvain Boily <sylvainboilydroid@gmail.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -16,14 +16,14 @@
  * at the top of the source tree.
  *
  * Please follow coding guidelines
- * https://wiki.asterisk.org/wiki/display/AST/Coding+Guidelines
+ * https://docs.asterisk.org/Development/Policies-and-Procedures/Coding-Guidelines/
  */
 
 /*! \file
  *
  * \brief Consul discovery module ressource
  *
- * \author\verbatim Sylvain Boily <sylvain@wazo.io> \endverbatim
+ * \author\verbatim Sylvain Boily <sylvainboilydroid@gmail.com> \endverbatim
  *
  * This is a resource to discovery an Asterisk application via Consul
  * \ingroup applications
@@ -77,6 +77,7 @@
 #include "asterisk/cli.h"
 #include "asterisk/manager.h"
 #include "asterisk/strings.h"
+#include "asterisk/utils.h"
 
 /*** DOCUMENTATION
 	<configInfo name="res_discovery_consul" language="en_US">
@@ -119,7 +120,7 @@
 			<xi:include xpointer="xpointer(/docs/managerEvent[@name='DiscoveryDeregister']/managerEventInstance/syntax/parameter)" />
 		</syntax>
 		<see-also>
-			<ref type="managerEvent">DiscoveryDeregister</ref>
+			<ref type="managerEvent">DiscoveryRegister</ref>
 		</see-also>
 		</managerEventInstance>
 	</managerEvent>
@@ -136,8 +137,9 @@
 #define MAX_URL_LENGTH 512
 
 struct curl_put_data {
-	char *data;
-	size_t size;
+	char *original_data_ptr;
+	const char *current_read_ptr;
+	size_t remaining_size;
 };
 
 struct discovery_config {
@@ -153,6 +155,10 @@ struct discovery_config {
 	char token[256];
 	int check;
 	int check_http_port;
+	char check_interval[16];
+	long consul_timeout_ms;
+	char ari_port[16];
+	char ari_scheme[16];
 };
 
 static struct discovery_config global_config = {
@@ -167,7 +173,11 @@ static struct discovery_config global_config = {
 	.tags = "asterisk",
 	.token = "",
 	.check = 0,
-	.check_http_port = 8088
+	.check_http_port = 8088,
+	.check_interval = "15s",
+	.consul_timeout_ms = 2000,
+	.ari_port = "",
+	.ari_scheme = "",
 };
 
 static const char config_file[] = "res_discovery_consul.conf";
@@ -179,8 +189,37 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable);
 static int discovery_ip_address(void);
 static int discovery_hostname(void);
 static int generate_uuid_id_consul(void);
+static int discover_ari_settings(void);
 
-/*! \brief Function called to read data and inject it on PUT */
+/* Manager Handler Prototype */
+static int manager_maintenance(struct mansession *s, const struct message *m);
+
+/* CLI Handlers */
+static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *discovery_cli_show_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+
+/* Dummy write callback for cURL when we don't need the response body */
+static size_t write_callback_noop(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    /* Do nothing with the data, just return the number of bytes processed */
+    return size * nmemb;
+}
+
+/*!
+ * \brief cURL read callback function for PUT requests with in-memory data.
+ *
+ * This function is used with CURLOPT_READFUNCTION to provide data for an HTTP PUT request
+ * from a memory buffer. It reads up to `size` * `nmemb` bytes from the buffer pointed
+ * to by `data` (which is a `struct curl_put_data *`) into the buffer pointed to by `ptr`.
+ *
+ * \param ptr Buffer to write the data into for libcurl to send.
+ * \param size Size of each data element.
+ * \param nmemb Number of data elements.
+ * \param data User-defined pointer, expected to be a `struct curl_put_data *` \
+ *             containing the source buffer and tracking information.
+ * \return The number of bytes actually copied to `ptr`, or 0 if no more data or error.
+ */
 static size_t read_data(char *ptr, size_t size, size_t nmemb, void* data)
 {
 	size_t realsize = size * nmemb;
@@ -189,18 +228,31 @@ static size_t read_data(char *ptr, size_t size, size_t nmemb, void* data)
 	}
 
 	struct curl_put_data* mem = (struct curl_put_data*) data;
-	if (mem->size > 0) {
-		size_t bytes_to_copy = (mem->size > realsize) ? realsize : mem->size;
-		memcpy(ptr,mem->data,bytes_to_copy);
-		mem->data += bytes_to_copy;
-		mem->size -= bytes_to_copy;
+	if (mem->remaining_size > 0) {
+		size_t bytes_to_copy = (mem->remaining_size > realsize) ? realsize : mem->remaining_size;
+		memcpy(ptr, mem->current_read_ptr, bytes_to_copy);
+		mem->current_read_ptr += bytes_to_copy;
+		mem->remaining_size -= bytes_to_copy;
 		return bytes_to_copy;
 	}
 
 	return 0;
 }
 
-/*! \brief Function called to create json object for curl */
+/*!
+ * \brief Creates the JSON payload for registering a service with Consul.
+ *
+ * This function constructs an `ast_json` object representing the service definition
+ * according to Consul's API requirements. It populates fields such as ID, Name,
+ * Address, Port, Tags, and health Check details based on the `global_config`.
+ * If 'auto' is specified for IP, hostname, or ID, it calls helper functions
+ * to determine these values.
+ *
+ * \note The caller is responsible for decrementing the reference count of the
+ *       returned `ast_json` object using `ast_json_unref` when it's no longer needed.
+ *
+ * \return A pointer to the newly created `ast_json` object, or NULL on failure.
+ */
 static struct ast_json *consul_put_json(void) {
 	char eid[18];
 	ast_eid_to_str(eid, sizeof(eid), &ast_eid_default);
@@ -235,6 +287,14 @@ static struct ast_json *consul_put_json(void) {
 	ast_json_object_set(obj, "Port", ast_json_integer_create(global_config.discovery_port));
 	ast_json_object_set(obj, "Tags", ast_json_ref(tags));
 	ast_json_object_set(meta, "eid", ast_json_string_create(eid));
+
+	if (!ast_strlen_zero(global_config.ari_port)) {
+		ast_json_object_set(meta, "ari_port", ast_json_string_create(global_config.ari_port));
+	}
+	if (!ast_strlen_zero(global_config.ari_scheme)) {
+		ast_json_object_set(meta, "ari_scheme", ast_json_string_create(global_config.ari_scheme));
+	}
+
 	ast_json_object_set(obj, "Meta", ast_json_ref(meta));
 
 	ast_json_array_append(tags, ast_json_string_create(global_config.tags));
@@ -246,7 +306,7 @@ static struct ast_json *consul_put_json(void) {
 				global_config.discovery_ip, global_config.check_http_port);
 		ast_json_object_set(obj, "Check", ast_json_ref(check));
 		ast_json_object_set(check, "Http", ast_json_string_create(url_check));
-		ast_json_object_set(check, "Interval", ast_json_string_create("15s"));
+		ast_json_object_set(check, "Interval", ast_json_string_create(global_config.check_interval));
 	}
 
 	ast_debug(1, "The json object created: %s\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT));
@@ -254,7 +314,20 @@ static struct ast_json *consul_put_json(void) {
 	return ast_json_ref(obj);
 }
 
-/*! \brief Function called to create json object for curl */
+/*!
+ * \brief Creates the JSON payload for a Consul service maintenance request.
+ *
+ * Currently, Consul's API for enabling/disabling maintenance mode via the
+ * `/v1/agent/service/maintenance/:service_id` endpoint does not expect a JSON body
+ * for the PUT request. The parameters are sent via the URL query string.
+ * Therefore, this function creates an empty JSON object as a placeholder,
+ * though it may not be strictly necessary for current Consul versions.
+ *
+ * \note The caller is responsible for decrementing the reference count of the
+ *       returned `ast_json` object using `ast_json_unref` when it's no longer needed.
+ *
+ * \return A pointer to a newly created, empty `ast_json` object, or NULL on failure.
+ */
 static struct ast_json *consul_put_maintenance_json(void) {
 	RAII_VAR(struct ast_json *, obj, ast_json_object_create(), ast_json_unref);
 
@@ -274,13 +347,29 @@ static struct curl_slist *set_headers_json(void) {
 	return headers;
 }
 
+/*!
+ * \brief Constructs the base URL for Consul API requests.
+ * \param str Pointer to an ast_str that will be populated with the base URL.
+ * \param path The specific API path to append to the base Consul agent URL (e.g., "/v1/agent/service/register").
+ *
+ * This function takes the configured Consul host and port from global_config
+ * and combines it with the provided API path to form a complete URL.
+ * The result is stored in the ast_str pointed to by str.
+ */
 static void set_base_url(struct ast_str **str, const char *path)
 {
 	ast_str_set(str, 0, "http://%s:%d%s",global_config.host, global_config.port, path);
 }
 
 
-/*! \brief Function called to deregister via curl on consul */
+/*!
+ * \brief Function called to deregister via curl on consul
+ *
+ * This function sends a PUT request to the Consul agent's
+ * `/v1/agent/service/deregister/:service_id` endpoint.
+ * It constructs the URL with the service ID from global configuration
+ * and includes the token if provided.
+ */
 static CURLcode consul_deregister(CURL *curl)
 {
 	CURLcode rcode;
@@ -298,27 +387,49 @@ static CURLcode consul_deregister(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, global_config.consul_timeout_ms);
 
 	ast_debug(1, "Deregister node %s with url %s\n", global_config.id, ast_str_buffer(url));
 
-	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryDeregister", NULL);
-
 	rcode = curl_easy_perform(curl);
+	if (rcode == CURLE_OK) {
+		long http_code = 0;
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		if (http_code >= 200 && http_code < 300) {
+			manager_event(EVENT_FLAG_SYSTEM, "DiscoveryDeregister", NULL);
+		} else {
+			ast_log(LOG_WARNING, "Consul deregister request for %s failed with HTTP status %ld\n", global_config.id, http_code);
+		}
+	}
 	curl_slist_free_all(headers);
 
 	return rcode;
 }
 
-/*! \brief Function called to deregister via curl on consul */
+/*!
+ * \brief Enables or disables maintenance mode for the service in Consul.
+ *
+ * This function sends a PUT request to the Consul agent's
+ * `/v1/agent/service/maintenance/:service_id` endpoint.
+ * It constructs the URL with the service ID from global configuration
+ * and includes the `enable` status ("true" or "false") and a reason in the query string.
+ * An empty JSON object is sent as the body, as per current Consul API (though it might not be strictly required).
+ *
+ * \param curl A CURL easy handle, assumed to be initialized.
+ * \param enable A string indicating whether to enable ("true") or disable ("false") maintenance mode.
+ * \return CURLcode indicating the result of the cURL operation (e.g., CURLE_OK on success).
+ */
 static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 {
-	CURLcode rcode;
-	struct curl_put_data put_data = {0,0};
-	struct curl_slist *headers;
+	CURLcode rcode = CURLE_OK;
+	struct curl_put_data put_data = { .original_data_ptr = NULL, .current_read_ptr = NULL, .remaining_size = 0 };
+	struct curl_slist *headers = NULL;
 	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH);
-	struct ast_json *obj;
+	struct ast_json *obj = NULL;
 	char *reason = curl_easy_escape(curl, "Maintenance activated by Asterisk module", 41);
+	const char *json_str = NULL;
+	size_t json_len = 0;
+	char *allocated_buffer = NULL;
 
 	obj = consul_put_maintenance_json();
 
@@ -330,17 +441,31 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	headers = set_headers_json();
 
-	put_data.data = ast_malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	memcpy(put_data.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
-		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	json_str = ast_json_dump_string_format(obj, AST_JSON_COMPACT);
+	if (json_str) {
+		json_len = strlen(json_str);
+		allocated_buffer = ast_strndup(json_str, json_len);
+		if (!allocated_buffer) {
+			ast_log(LOG_ERROR, "Failed to duplicate JSON string for Consul maintenance request\n");
+			ast_json_free(obj);
+			if (headers) { curl_slist_free_all(headers); }
+			if (reason) { curl_free(reason); }
+			return CURLE_OUT_OF_MEMORY;
+		}
+		put_data.original_data_ptr = allocated_buffer;
+		put_data.current_read_ptr = allocated_buffer;
+		put_data.remaining_size = json_len;
+	} else {
+		ast_log(LOG_WARNING, "JSON string for maintenance object is NULL\n");
+	}
+
 
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
-	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.size);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, global_config.consul_timeout_ms);
+	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.remaining_size);
 
 	curl_easy_setopt(curl, CURLOPT_READDATA, (void *) &put_data);
 	curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_data);
@@ -352,18 +477,29 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	ast_json_free(obj);
 	curl_slist_free_all(headers);
 	curl_free(reason);
+	ast_free(put_data.original_data_ptr);
 
 	return rcode;
 }
 
-/*! \brief Function called to register via curl on consul */
+/*!
+ * \brief Function called to register via curl on consul
+ *
+ * This function sends a PUT request to the Consul agent's
+ * `/v1/agent/service/register` endpoint.
+ * It constructs the URL with the service ID from global configuration
+ * and includes the token if provided.
+ */
 static CURLcode consul_register(CURL *curl)
 {
-	CURLcode rcode;
-	struct curl_put_data put_data = {0,0};
-	struct curl_slist *headers;
+	CURLcode rcode = CURLE_OK;
+	struct curl_put_data put_data = { .original_data_ptr = NULL, .current_read_ptr = NULL, .remaining_size = 0 };
+	struct curl_slist *headers = NULL;
 	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH);
-	struct ast_json *obj;
+	struct ast_json *obj = NULL;
+	const char *json_str = NULL;
+	size_t json_len = 0;
+	char *allocated_buffer = NULL;
 
 	headers = set_headers_json();
 	obj = consul_put_json();
@@ -373,19 +509,41 @@ static CURLcode consul_register(CURL *curl)
 		ast_str_append(&url, 0, "?token=%s", global_config.token);
 	}
 
-	put_data.data = ast_malloc(strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	memcpy(put_data.data, ast_json_dump_string_format(obj, AST_JSON_COMPACT),
-		   strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT)));
-	put_data.size = strlen(ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	if (obj) {
+		json_str = ast_json_dump_string_format(obj, AST_JSON_COMPACT);
+		if (json_str) {
+			json_len = strlen(json_str);
+			allocated_buffer = ast_strndup(json_str, json_len);
+			if (!allocated_buffer) {
+				ast_log(LOG_ERROR, "Failed to duplicate JSON string for Consul registration request\n");
+				ast_json_free(obj);
+				if (headers) { curl_slist_free_all(headers); }
+				return CURLE_OUT_OF_MEMORY;
+			}
+			put_data.original_data_ptr = allocated_buffer;
+			put_data.current_read_ptr = allocated_buffer;
+			put_data.remaining_size = json_len;
+		} else {
+			ast_log(LOG_ERROR, "JSON string for registration object is NULL\n");
+			put_data.remaining_size = 0; 
+		}
+	} else {
+		ast_log(LOG_ERROR, "Failed to create JSON for Consul registration\n");
+		if (headers) {
+			curl_slist_free_all(headers);
+		}
+		return CURLE_OUT_OF_MEMORY;
+	}
+
 
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
 	curl_easy_setopt(curl, CURLOPT_URL, ast_str_buffer(url));
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, global_config.consul_timeout_ms);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.size);
+	curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) put_data.remaining_size);
 
 	curl_easy_setopt(curl, CURLOPT_READDATA, (void *) &put_data);
 	curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_data);
@@ -396,17 +554,24 @@ static CURLcode consul_register(CURL *curl)
 
 	ast_json_free(obj);
 	curl_slist_free_all(headers);
+	ast_free(put_data.original_data_ptr);
 
 	return rcode;
 }
 
-/*! \brief Function called to load or reload the configuration file */
+/*!
+ * \brief Function called to load or reload the configuration file
+ *
+ * This function loads the configuration file and updates the global configuration
+ * based on the values found in the file.
+ */
 static void load_config(int reload)
 {
 	struct ast_config *cfg = NULL;
 
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_variable *v;
+	char *endptr;
 
 	int enabled, check;
 
@@ -431,30 +596,56 @@ static void load_config(int reload)
 
 	for (v = ast_variable_browse(cfg, "consul"); v; v = v->next) {
 		if (!strcasecmp(v->name, "id")) {
-			ast_copy_string(global_config.id, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.id, v->value, sizeof(global_config.id));
 		} else if (!strcasecmp(v->name, "host")) {
-			ast_copy_string(global_config.host, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.host, v->value, sizeof(global_config.host));
 		} else if (!strcasecmp(v->name, "port")) {
-			global_config.port = atoi(v->value);
+			long val = strtol(v->value, &endptr, 10);
+			if (*endptr == '\0' && val > 0 && val <= 65535) {
+				global_config.port = (int)val;
+			} else {
+				ast_log(LOG_WARNING, "Invalid port value for 'port': %s. Using default %d.\n", v->value, global_config.port);
+			}
 		} else if (!strcasecmp(v->name, "tags")) {
-			ast_copy_string(global_config.tags, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.tags, v->value, sizeof(global_config.tags));
 		} else if (!strcasecmp(v->name, "name")) {
-			ast_copy_string(global_config.name, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.name, v->value, sizeof(global_config.name));
 		} else if (!strcasecmp(v->name, "discovery_ip")) {
-			ast_copy_string(global_config.discovery_ip, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.discovery_ip, v->value, sizeof(global_config.discovery_ip));
 		} else if (!strcasecmp(v->name, "discovery_port")) {
-			global_config.discovery_port = atoi(v->value);
+			long val = strtol(v->value, &endptr, 10);
+			if (*endptr == '\0' && val > 0 && val <= 65535) {
+				global_config.discovery_port = (int)val;
+			} else {
+				ast_log(LOG_WARNING, "Invalid port value for 'discovery_port': %s. Using default %d.\n", v->value, global_config.discovery_port);
+			}
 		} else if (!strcasecmp(v->name, "discovery_interface")) {
-			ast_copy_string(global_config.discovery_interface, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.discovery_interface, v->value, sizeof(global_config.discovery_interface));
 		} else if (!strcasecmp(v->name, "token")) {
-			ast_copy_string(global_config.token, v->value, strlen(v->value) + 1);
+			ast_copy_string(global_config.token, v->value, sizeof(global_config.token));
 		} else if (!strcasecmp(v->name, "check")) {
 			if (ast_true(v->value) == 0) {
 				check = 0;
 			}
 			global_config.check = check;
 		} else if (!strcasecmp(v->name, "check_http_port")) {
-			global_config.check_http_port =  atoi(v->value);
+			long val = strtol(v->value, &endptr, 10);
+			if (*endptr == '\0' && val > 0 && val <= 65535) {
+				global_config.check_http_port = (int)val;
+			} else {
+				ast_log(LOG_WARNING, "Invalid port value for 'check_http_port': %s. Using default %d.\n", v->value, global_config.check_http_port);
+			}
+		} else if (!strcasecmp(v->name, "check_interval")) {
+			ast_copy_string(global_config.check_interval, v->value, sizeof(global_config.check_interval));
+		} else if (!strcasecmp(v->name, "consul_timeout_ms")) {
+			long val = strtol(v->value, &endptr, 10);
+			if (*endptr == '\0' && val > 0) {
+				global_config.consul_timeout_ms = val;
+			} else {
+				ast_log(LOG_WARNING, "Invalid value for 'consul_timeout_ms': %s. Using default %ldms.\n", v->value, global_config.consul_timeout_ms);
+			}
+		} else if (strcasecmp(v->name, "enabled") != 0 && strcasecmp(v->name, "description") != 0) {
+			ast_log(LOG_WARNING, "Unknown option in %s: %s\n", config_file, v->name);
 		}
 	}
 
@@ -463,7 +654,12 @@ static void load_config(int reload)
 	return;
 }
 
-/*! \brief Function called to discovery ip */
+/*!
+ * \brief Function called to discovery ip
+ *
+ * This function discovers the IP address of the system
+ * and updates the global configuration with the discovered IP address.
+ */
 static int discovery_ip_address(void)
 {
 	int fd;
@@ -471,48 +667,135 @@ static int discovery_ip_address(void)
 	char host[16];
 
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		ast_log(LOG_ERROR, "Failed to create socket for IP discovery: %s\n", strerror(errno));
+		return -1;
+	}
 	ifr.ifr_addr.sa_family = AF_INET;
 	strncpy(ifr.ifr_name, global_config.discovery_interface, IFNAMSIZ-1);
-	ioctl(fd, SIOCGIFADDR, &ifr);
+	ifr.ifr_name[IFNAMSIZ-1] = '\0';
+
+	if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
+		ast_log(LOG_ERROR, "ioctl(SIOCGIFADDR) failed for interface %s: %s\n", global_config.discovery_interface, strerror(errno));
+		close(fd);
+		return -1;
+	}
 	close(fd);
 
 	sprintf(host, "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
-	ast_copy_string(global_config.discovery_ip, host, strlen(host) + 1);
+	ast_copy_string(global_config.discovery_ip, host, sizeof(global_config.discovery_ip));
 
 	ast_debug(1,"Discovery IP: %s\n", host);
 
 	return 0;
 }
 
-/*! \brief Function called to discovery hostname */
+/*!
+ * \brief Function called to discovery hostname
+ *
+ * This function discovers the hostname of the system
+ * and updates the global configuration with the discovered hostname.
+ */
 static int discovery_hostname(void)
 {
 	char hostname[1024];
 
-	gethostname(hostname, 1024);
-	ast_copy_string(global_config.name, hostname, strlen(hostname) + 1);
+	if (gethostname(hostname, sizeof(hostname)) != 0) {
+		ast_log(LOG_ERROR, "Failed to get hostname: %s\n", strerror(errno));
+		/* Optionally set a default name or return an error */
+		ast_copy_string(global_config.name, "asterisk-unknown", sizeof(global_config.name));
+		return -1;
+	}
+	ast_copy_string(global_config.name, hostname, sizeof(global_config.name));
 
 	ast_debug(1, "Discovery hostname: %s\n", hostname);
 
 	return 0;
 }
 
-/*! \brief Function called to generate uuid */
+/*!
+ * \brief Function called to generate uuid
+ *
+ * This function generates a UUID and updates the global configuration with the generated UUID.
+ */
 static int generate_uuid_id_consul(void)
 {
 	const char *uuid;
 	char uuid_str[256];
 
 	uuid = ast_uuid_generate_str(uuid_str, sizeof(uuid_str));
-	ast_copy_string(global_config.id, uuid, strlen(uuid) + 1);
+	ast_copy_string(global_config.id, uuid, sizeof(global_config.id));
 
 	ast_debug(1, "Auto ID: %s\n", uuid);
 
 	return 0;
 }
 
+static int discover_ari_settings(void) {
+    struct ast_config *http_cfg;
+    struct ast_variable *v;
+    const char *http_conf_file = "http.conf";
+    int http_enabled = 0;
+    const char *port_str = NULL;
+    int tls_enabled = 0;
+    struct ast_flags config_load_flags = { CONFIG_FLAG_NOCACHE }; 
 
-/*! \brief Function called to load the resource */
+    ast_copy_string(global_config.ari_port, "", sizeof(global_config.ari_port));
+    ast_copy_string(global_config.ari_scheme, "", sizeof(global_config.ari_scheme));
+
+    http_cfg = ast_config_load(http_conf_file, config_load_flags);
+    if (!http_cfg || http_cfg == CONFIG_STATUS_FILEINVALID || http_cfg == CONFIG_STATUS_FILEUNCHANGED) {
+        ast_log(LOG_NOTICE, "Could not load '%s' for HTTP settings discovery. HTTP metadata will be omitted.\n", http_conf_file);
+        if (http_cfg && http_cfg != CONFIG_STATUS_FILEINVALID && http_cfg != CONFIG_STATUS_FILEUNCHANGED) {
+            ast_config_destroy(http_cfg);
+        }
+        return -1;
+    }
+
+    for (v = ast_variable_browse(http_cfg, "general"); v; v = v->next) {
+        if (!strcasecmp(v->name, "enabled")) {
+            if (ast_true(v->value)) {
+                http_enabled = 1;
+            }
+        } else if (!strcasecmp(v->name, "bindport")) {
+            port_str = v->value;
+        } else if (!strcasecmp(v->name, "tlsenable")) {
+            if (ast_true(v->value)) {
+                tls_enabled = 1;
+            }
+        }
+    }
+
+    if (!http_enabled) {
+        ast_log(LOG_DEBUG, "HTTP is not enabled in '%s'. HTTP metadata will be omitted.\n", http_conf_file);
+        ast_config_destroy(http_cfg);
+        return 0;
+    }
+
+    if (port_str) {
+        ast_copy_string(global_config.ari_port, port_str, sizeof(global_config.ari_port));
+        ast_debug(1, "Discovered HTTP Port: %s\n", global_config.ari_port);
+    } else {
+        ast_log(LOG_WARNING, "HTTP port not found in '%s'. HTTP port metadata will be omitted.\n", http_conf_file);
+    }
+
+    if (tls_enabled) {
+        ast_copy_string(global_config.ari_scheme, "https", sizeof(global_config.ari_scheme));
+    } else {
+        ast_copy_string(global_config.ari_scheme, "http", sizeof(global_config.ari_scheme));
+    }
+    ast_debug(1, "Discovered ARI Scheme: %s\n", global_config.ari_scheme);
+
+    ast_config_destroy(http_cfg);
+    return 0;
+}
+
+/*!
+ * \brief Function called to load the resource
+ *
+ * This function loads the resource and updates the global configuration
+ * based on the values found in the file.
+ */
 static int load_res(int start)
 {
 	CURL *curl;
@@ -538,7 +821,11 @@ static int load_res(int start)
 	return 0;
 }
 
-/*! \brief Function called to exec CLI */
+/*!
+ * \brief Function called to exec CLI
+ *
+ * This function executes the CLI command and returns the result.
+ */
 static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
@@ -559,6 +846,8 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	ast_cli(a->fd, "ID service: %s\n", global_config.id);
 	ast_cli(a->fd, "Name service: %s\n", global_config.name);
 	ast_cli(a->fd, "Tags service: %s\n\n", global_config.tags);
+	ast_cli(a->fd, "ARI Port (Discovered): %s\n", !ast_strlen_zero(global_config.ari_port) ? global_config.ari_port : "Not Discovered/Enabled");
+	ast_cli(a->fd, "ARI Scheme (Discovered): %s\n", !ast_strlen_zero(global_config.ari_scheme) ? global_config.ari_scheme : "Not Discovered/Enabled");
 	ast_cli(a->fd, "Discovery Settings:\n");
 	ast_cli(a->fd, "-------------------\n");
 	ast_cli(a->fd, "Discovery ip: %s\n", global_config.discovery_ip);
@@ -575,7 +864,11 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	return NULL;
 }
 
-/*! \brief Function called to exec CLI */
+/*!
+ * \brief Function called to exec CLI
+ *
+ * This function executes the CLI command and returns the result.
+ */
 static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	CURL *curl;
@@ -599,6 +892,10 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 	}
 
 	curl = curl_easy_init();
+	if (!curl) {
+		ast_log(LOG_ERROR, "Failed to initialize cURL handle for maintenance CLI\n");
+		return CLI_FAILURE;
+	}
 
 	if (ast_true(a->argv[3])) {
 		rcode = consul_maintenance_service(curl, "true");
@@ -620,6 +917,224 @@ static char *discovery_cli_set_maintenance(struct ast_cli_entry *e, int cmd, str
 	return NULL;
 }
 
+/*!
+ * \brief Function called to show current discovery status
+ *
+ * This function shows the current operational status of the Consul discovery module,
+ * including connection to Consul and service registration details.
+ */
+static char *discovery_cli_show_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	CURL *curl_handle = NULL;
+	CURLcode rcode;
+	long http_code = 0;
+	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH); /* Use ast_str_alloca for stack allocation */
+	struct curl_slist *headers = NULL;
+	char service_health_url[MAX_URL_LENGTH];
+	int required_len_for_health_url;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "discovery show status";
+		e->usage =
+			"Usage: discovery show status\n"
+			"       Shows the current operational status of the Consul discovery module,\n"
+			"       including connection to Consul and service registration details.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, "--- Consul Discovery Status ---\n");
+	ast_cli(a->fd, "Module Enabled: %s\n", global_config.enabled ? "Yes" : "No");
+
+	if (!global_config.enabled) {
+		ast_cli(a->fd, "Module is disabled. No active connection to Consul.\n");
+		return CLI_SUCCESS;
+	}
+
+	ast_cli(a->fd, "Consul Agent: http://%s:%d\n", global_config.host, global_config.port);
+	ast_cli(a->fd, "Registered Service ID: %s\n", global_config.id);
+	ast_cli(a->fd, "Registered Service Name: %s\n", global_config.name);
+	ast_cli(a->fd, "Registered Address:Port: %s:%d\n", global_config.discovery_ip, global_config.discovery_port);
+
+	curl_handle = curl_easy_init();
+	if (!curl_handle) {
+		ast_cli(a->fd, "Consul Connection Status: Failed to initialize cURL handle for status check.\n");
+		return CLI_FAILURE;
+	}
+
+	required_len_for_health_url = snprintf(service_health_url, sizeof(service_health_url),
+			 "http://%s:%d/v1/agent/health/service/id/%s",
+			 global_config.host, global_config.port, global_config.id);
+
+	if (required_len_for_health_url < 0) {
+		ast_log(LOG_ERROR, "snprintf encoding error while constructing health URL for status check.\n");
+		if (curl_handle) { curl_easy_cleanup(curl_handle); }
+		return CLI_FAILURE;
+	}
+	if ((size_t)required_len_for_health_url >= sizeof(service_health_url)) {
+		ast_log(LOG_WARNING, "Health URL was truncated. Hostname ('%s') or Service ID ('%s') may be too long. Cannot perform live status check.\n",
+				global_config.host, global_config.id);
+		ast_cli(a->fd, "Consul Live Status: Could not construct valid health check URL (hostname/ID too long for buffer %d).\n", MAX_URL_LENGTH);
+		if (curl_handle) { curl_easy_cleanup(curl_handle); }
+		return CLI_SUCCESS;
+	}
+
+	if (!ast_strlen_zero(global_config.token)) {
+		ast_str_set(&url, 0, "%s?token=%s", service_health_url, global_config.token);
+	} else {
+		ast_str_set(&url, 0, "%s", service_health_url);
+	}
+
+	headers = curl_slist_append(NULL, "Accept: application/json");
+
+	curl_easy_setopt(curl_handle, CURLOPT_URL, ast_str_buffer(url));
+	curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT_MS, global_config.consul_timeout_ms);
+	curl_easy_setopt(curl_handle, CURLOPT_NOBODY, 0L);
+	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_callback_noop);
+
+	rcode = curl_easy_perform(curl_handle);
+	if (rcode == CURLE_OK) {
+		curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_code);
+		if (http_code == 200) {
+			ast_cli(a->fd, "Consul Live Status: Connected. Service '%s' is Healthy (HTTP 200 on /v1/agent/health/service/id endpoint).\n", global_config.id);
+		} else if (http_code == 404) {
+			ast_cli(a->fd, "Consul Live Status: Connected. Service '%s' Not Found (HTTP 404). May be deregistered or ID mismatch.\n", global_config.id);
+		} else if (http_code == 429) {
+			ast_cli(a->fd, "Consul Live Status: Connected. Service '%s' has Warning status (HTTP 429).\n", global_config.id);
+		} else if (http_code == 503) {
+			ast_cli(a->fd, "Consul Live Status: Connected. Service '%s' has Critical status (HTTP 503).\n", global_config.id);
+		} else {
+			ast_cli(a->fd, "Consul Live Status: Connected. Unexpected HTTP status %ld for service health query.\n", http_code);
+		}
+	} else {
+		ast_cli(a->fd, "Consul Live Status: Failed to connect to Consul agent at http://%s:%d. Error: %s\n",
+				 global_config.host, global_config.port, curl_easy_strerror(rcode));
+	}
+
+	ast_cli(a->fd, "Service Health Check Config (as registered by this module):\n");
+	ast_cli(a->fd, "  Enabled: %s\n", global_config.check ? "Yes" : "No");
+	if (global_config.check) {
+		ast_cli(a->fd, "  Type: HTTP GET http://%s:%d/httpstatus\n", global_config.discovery_ip, global_config.check_http_port);
+		ast_cli(a->fd, "  Interval: %s\n", global_config.check_interval);
+	}
+
+	if (headers) {
+		curl_slist_free_all(headers);
+	}
+	if (curl_handle) {
+		curl_easy_cleanup(curl_handle);
+	}
+
+	return CLI_SUCCESS;
+}
+
+/*!
+ * \brief Function called to define CLI
+ *
+ * This function defines the CLI commands for the discovery module.
+ */
+static struct ast_cli_entry cli_discovery[] = {
+	AST_CLI_DEFINE(discovery_cli_settings, "Show discovery settings"),
+	AST_CLI_DEFINE(discovery_cli_set_maintenance, "Set discovery service in maintenance mode"),
+	AST_CLI_DEFINE(discovery_cli_show_status, "Show current discovery module status")
+};
+
+/*!
+ * \brief Function called to reload the module
+ *
+ * This function reloads the module and updates the global configuration
+ * based on the values found in the file.
+ */
+static int reload_module(void)
+{
+	ast_debug(1, "Reloading res_discovery_consul module\n");
+
+	if (global_config.enabled) {
+		ast_debug(1, "Deregistering service %s due to reload\n", global_config.id);
+		load_res(0);
+	}
+
+	load_config(1);
+
+	if (global_config.enabled) {
+		ast_debug(1, "Attempting to register service %s with new configuration after reload\n", global_config.id);
+		if (load_res(1)) {
+			ast_log(LOG_WARNING, "Failed to register with Consul after reload with new configuration\n");
+		} else {
+			ast_debug(1, "Successfully re-registered with Consul after reload.\n");
+		}
+	} else {
+		ast_debug(1, "Module is disabled after reload. Not registering with Consul.\n");
+	}
+	return 0;
+}
+
+/*!
+ * \brief Function called to unload the module
+ *
+ * This function unloads the module and updates the global configuration
+ * based on the values found in the file.
+ */
+static int unload_module(void)
+{
+	if (global_config.enabled) {
+		load_res(0);
+	}
+	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+	ast_manager_unregister("DiscoverySetMaintenance");
+	return 0;
+}
+
+/*!
+ * \brief Function called to load the module
+ *
+ * This function loads the module and updates the global configuration
+ * based on the values found in the file.
+ */
+static int load_module(void)
+{
+	if (!ast_module_check("res_curl.so")) {
+		if (ast_load_resource("res_curl.so") != AST_MODULE_LOAD_SUCCESS) {
+			ast_log(LOG_ERROR, "Cannot load res_curl, so res_discovery_consul cannot be loaded\n");
+			return AST_MODULE_LOAD_DECLINE;
+		}
+	}
+
+	if (global_config.enabled != 1) {
+		ast_log(LOG_NOTICE, "This module is disabled\n");
+		return AST_MODULE_LOAD_DECLINE;
+	}
+
+	if (ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery))) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance)) {
+		ast_log(LOG_ERROR, "Unable to register manager action DiscoverySetMaintenance\n");
+		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	load_config(0);
+	discover_ari_settings();
+
+	if (load_res(1)) {
+		ast_log(LOG_WARNING, "Failed to register with Consul\n");
+	} else {
+		ast_log(LOG_NOTICE, "Successfully registered with Consul\n");
+	}
+
+	return AST_MODULE_LOAD_SUCCESS;
+}
+
+/*!
+ * \brief Function called to manager maintenance
+ *
+ * This function manages the maintenance of the service in Consul.
+ */
 static int manager_maintenance(struct mansession *s, const struct message *m)
 {
 	CURL *curl;
@@ -632,6 +1147,11 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 	}
 
 	curl = curl_easy_init();
+	if (!curl) {
+		ast_log(LOG_ERROR, "Failed to initialize cURL handle for manager maintenance\n");
+		astman_send_error(s, m, "cURL initialization failed");
+		return 0;
+	}
 
 	rcode = consul_maintenance_service(curl, enable);
 
@@ -644,51 +1164,12 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 	return RESULT_SUCCESS;
 }
 
-/*! \brief Function called to define CLI */
-static struct ast_cli_entry cli_discovery[] = {
-	AST_CLI_DEFINE(discovery_cli_settings, "Show discovery settings"),
-	AST_CLI_DEFINE(discovery_cli_set_maintenance, "Set discovery service in maintenance mode")
-};
-
-static int reload_module(void)
-{
-	load_config(1);
-	return 0;
-}
-
-static int unload_module(void)
-{
-	load_res(0);
-	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
-	ast_manager_unregister("DiscoverySetMaintenance");
-	return 0;
-}
-
-static int load_module(void)
-{
-	if (!ast_module_check("res_curl.so")) {
-		if (ast_load_resource("res_curl.so") != AST_MODULE_LOAD_SUCCESS) {
-			ast_log(LOG_ERROR, "Cannot load res_curl, so res_discovery_consul cannot be loaded\n");
-			return AST_MODULE_LOAD_DECLINE;
-		}
-	}
-
-	load_config(0);
-
-	if (global_config.enabled == 0) {
-		ast_log(LOG_NOTICE, "This module is disabled\n");
-		return AST_MODULE_LOAD_DECLINE;
-	}
-
-	if (load_res(1)) {
-		return AST_MODULE_LOAD_DECLINE;
-	}
-
-	ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
-	ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance);
-	return AST_MODULE_LOAD_SUCCESS;
-}
-
+/*!
+ * \brief Function called to define the module
+ *
+ * This function defines the module and updates the global configuration
+ * based on the values found in the file.
+ */
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Discovery CONSUL",
 	.support_level = AST_MODULE_SUPPORT_EXTENDED,
 	.load = load_module,

@@ -13,3 +13,4 @@ discovery_port=5060
 discovery_interface=eth0 ;only use if discovery_ip is auto
 check=true
 check_http_port=8888
+check_interval=10s
