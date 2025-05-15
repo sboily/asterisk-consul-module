@@ -41,6 +41,7 @@
 /*** MODULEINFO
 	<defaultenabled>no</defaultenabled>
 	<depend>curl</depend>
+	<depend>http</depend>
 	<support_level>extended</support_level>
  ***/
 
@@ -78,6 +79,7 @@
 #include "asterisk/manager.h"
 #include "asterisk/strings.h"
 #include "asterisk/utils.h"
+#include "asterisk/http.h"
 
 /*** DOCUMENTATION
 	<configInfo name="res_discovery_consul" language="en_US">
@@ -135,6 +137,7 @@
  ***/
 
 #define MAX_URL_LENGTH 512
+#define MAX_CHECK_ID_LENGTH 280
 
 struct curl_put_data {
 	char *original_data_ptr;
@@ -159,6 +162,8 @@ struct discovery_config {
 	long consul_timeout_ms;
 	char ari_port[16];
 	char ari_scheme[16];
+	char check_timeout[16];
+	char check_deregister_after[16];
 };
 
 static struct discovery_config global_config = {
@@ -178,9 +183,99 @@ static struct discovery_config global_config = {
 	.consul_timeout_ms = 2000,
 	.ari_port = "",
 	.ari_scheme = "",
+	.check_timeout = "3s",
+	.check_deregister_after = "30s",
 };
 
 static const char config_file[] = "res_discovery_consul.conf";
+
+// HTTP Callback function for EID check
+static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
+                                 const struct ast_http_uri *urih,
+                                 const char *uri_path, 
+                                 enum ast_http_method method,
+                                 struct ast_variable *get_params,
+                                 struct ast_variable *headers)
+{
+	struct ast_variable *param;
+	const char *expected_eid = NULL;
+	char response_text[560];
+
+	ast_debug(3, "HTTP EID Check: Callback entered. URI path: '%s', Method: %d\n", uri_path ? uri_path : "(null)", method);
+
+	if (!ser) {
+		ast_log(LOG_ERROR, "HTTP EID Check: Session (ser) is NULL in callback! Cannot proceed.\n");
+		return 0;
+	}
+
+	if (method != AST_HTTP_GET) {
+		ast_http_error(ser, 405, "Method Not Allowed", "Only GET is allowed for this endpoint.");
+		return 0; 
+	}
+
+	for (param = get_params; param; param = param->next) {
+		if (param->name && strcasecmp(param->name, "expected_eid") == 0) {
+			expected_eid = param->value;
+			break;
+		}
+	}
+
+	if (ast_strlen_zero(expected_eid)) {
+		ast_log(LOG_WARNING, "HTTP EID Check: 'expected_eid' parameter missing or empty.\n");
+		ast_http_error(ser, 400, "Bad Request", "Required query parameter 'expected_eid' is missing.");
+		return 0;
+	}
+
+	if (ast_strlen_zero(global_config.id)) {
+		ast_log(LOG_ERROR, "HTTP EID Check: global_config.id is empty! Cannot perform EID comparison.\n");
+		ast_http_error(ser, 500, "Internal Server Error", "Server configuration error: instance EID not set.");
+		return 0;
+	}
+
+	if (strcmp(global_config.id, expected_eid) == 0) {
+		snprintf(response_text, sizeof(response_text), "OK - EID Match: %s", global_config.id);
+		ast_debug(1, "HTTP EID Check: Match for EID '%s'. Responding 200 OK.\n", global_config.id);
+
+		struct ast_str *body_str = NULL;
+		struct ast_str *headers_str = NULL;
+
+		body_str = ast_str_create(strlen(response_text) + 16);
+		headers_str = ast_str_create(128);
+
+		if (body_str && headers_str) {
+			ast_str_set(&body_str, 0, "%s", response_text);
+			ast_str_set(&headers_str, 0, "Content-Type: text/plain; charset=utf-8\r\n\r\n");
+
+			ast_http_send(ser, method, 200, "OK", headers_str, body_str, -1, 0); 
+			body_str = NULL;
+			headers_str = NULL;
+		} else {
+			ast_log(LOG_ERROR, "HTTP EID Check: Failed to allocate memory for response/headers.\n");
+			if (body_str) {
+				ast_free(body_str);
+			}
+			if (headers_str) {
+				ast_free(headers_str);
+			}
+			ast_http_error(ser, 500, "Internal Server Error", "Failed to allocate response buffer.");
+		}
+	} else {
+		snprintf(response_text, sizeof(response_text), "EID Mismatch. Expected: %s, Instance has: %s", expected_eid, global_config.id);
+		ast_log(LOG_NOTICE, "HTTP EID Check: Mismatch. Expected EID: '%s', Instance EID: '%s'. Responding 404 Not Found.\n", expected_eid, global_config.id);
+		ast_http_error(ser, 404, "Not Found", response_text);
+	}
+	return 0; 
+}
+
+// HTTP URI handler structure for EID check
+static struct ast_http_uri EID_CHECK_URI = {
+	.uri = "consul_check", 
+	.description = "Consul EID Check for res_discovery_consul",
+	.callback = handle_http_check_eid,
+	.has_subtree = 1,
+	.data = NULL,
+	.key = "res_discovery_consul", 
+};
 
 static size_t read_data(char *ptr, size_t size, size_t nmemb, void* data);
 static CURLcode consul_deregister(CURL *curl);
@@ -301,12 +396,21 @@ static struct ast_json *consul_put_json(void) {
 
 	if (global_config.check == 1) {
 		char url_check[MAX_URL_LENGTH];
+		char check_id_str[MAX_CHECK_ID_LENGTH];
 
-		snprintf(url_check, sizeof(url_check), "http://%s:%d/httpstatus",
-				global_config.discovery_ip, global_config.check_http_port);
+		snprintf(check_id_str, sizeof(check_id_str), "check-asterisk-eid-%s", global_config.id);
+
+		snprintf(url_check, sizeof(url_check), "http://%s:%d/consul_check?expected_eid=%s",
+				global_config.discovery_ip, global_config.check_http_port, global_config.id);
+
 		ast_json_object_set(obj, "Check", ast_json_ref(check));
-		ast_json_object_set(check, "Http", ast_json_string_create(url_check));
+
+		ast_json_object_set(check, "CheckID", ast_json_string_create(check_id_str));
+		ast_json_object_set(check, "Name", ast_json_string_create("Asterisk Instance EID Verification"));
+		ast_json_object_set(check, "HTTP", ast_json_string_create(url_check));
 		ast_json_object_set(check, "Interval", ast_json_string_create(global_config.check_interval));
+		ast_json_object_set(check, "Timeout", ast_json_string_create(global_config.check_timeout));
+		ast_json_object_set(check, "DeregisterCriticalServiceAfter", ast_json_string_create(global_config.check_deregister_after));
 	}
 
 	ast_debug(1, "The json object created: %s\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT));
@@ -644,6 +748,10 @@ static void load_config(int reload)
 			} else {
 				ast_log(LOG_WARNING, "Invalid value for 'consul_timeout_ms': %s. Using default %ldms.\n", v->value, global_config.consul_timeout_ms);
 			}
+		} else if (!strcasecmp(v->name, "check_timeout")) {
+			ast_copy_string(global_config.check_timeout, v->value, sizeof(global_config.check_timeout));
+		} else if (!strcasecmp(v->name, "check_deregister_after")) {
+			ast_copy_string(global_config.check_deregister_after, v->value, sizeof(global_config.check_deregister_after));
 		} else if (strcasecmp(v->name, "enabled") != 0 && strcasecmp(v->name, "description") != 0) {
 			ast_log(LOG_WARNING, "Unknown option in %s: %s\n", config_file, v->name);
 		}
@@ -859,6 +967,9 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	ast_cli(a->fd, "Token: %s\n", global_config.token);
 	ast_cli(a->fd, "Check: %d\n", global_config.check);
 	ast_cli(a->fd, "Check http port: %d\n\n", global_config.check_http_port);
+	ast_cli(a->fd, "Check interval: %s\n", global_config.check_interval);
+	ast_cli(a->fd, "Check timeout: %s\n", global_config.check_timeout);
+	ast_cli(a->fd, "Check deregister after: %s\n\n", global_config.check_deregister_after);
 	ast_cli(a->fd, "----\n");
 
 	return NULL;
@@ -1017,8 +1128,10 @@ static char *discovery_cli_show_status(struct ast_cli_entry *e, int cmd, struct 
 	ast_cli(a->fd, "Service Health Check Config (as registered by this module):\n");
 	ast_cli(a->fd, "  Enabled: %s\n", global_config.check ? "Yes" : "No");
 	if (global_config.check) {
-		ast_cli(a->fd, "  Type: HTTP GET http://%s:%d/httpstatus\n", global_config.discovery_ip, global_config.check_http_port);
+		ast_cli(a->fd, "  Type: HTTP GET http://%s:%d/res_discovery_consul/check_eid?expected_eid=%s\n", global_config.discovery_ip, global_config.check_http_port, global_config.id);
 		ast_cli(a->fd, "  Interval: %s\n", global_config.check_interval);
+		ast_cli(a->fd, "  Timeout: %s\n", global_config.check_timeout);
+		ast_cli(a->fd, "  DeregisterCriticalServiceAfter: %s\n", global_config.check_deregister_after);
 	}
 
 	if (headers) {
@@ -1083,6 +1196,7 @@ static int unload_module(void)
 	if (global_config.enabled) {
 		load_res(0);
 	}
+	ast_http_uri_unlink(&EID_CHECK_URI);
 	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
 	ast_manager_unregister("DiscoverySetMaintenance");
 	return 0;
@@ -1096,15 +1210,21 @@ static int unload_module(void)
  */
 static int load_module(void)
 {
+	int ret;
+
 	if (!ast_module_check("res_curl.so")) {
 		if (ast_load_resource("res_curl.so") != AST_MODULE_LOAD_SUCCESS) {
-			ast_log(LOG_ERROR, "Cannot load res_curl, so res_discovery_consul cannot be loaded\n");
+			ast_log(LOG_ERROR, "Cannot load res_curl, so res_discovery_consul cannot be loaded\\n");
 			return AST_MODULE_LOAD_DECLINE;
 		}
 	}
 
-	if (global_config.enabled != 1) {
-		ast_log(LOG_NOTICE, "This module is disabled\n");
+	// Configuration settings load first
+	load_config(0);
+	discover_ari_settings(); // Discover ARI settings after loading config
+
+	if (global_config.enabled != 1) { // Check enabled status after loading config
+		ast_log(LOG_NOTICE, "res_discovery_consul module is disabled in configuration.\\n");
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
@@ -1113,18 +1233,29 @@ static int load_module(void)
 	}
 
 	if (ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance)) {
-		ast_log(LOG_ERROR, "Unable to register manager action DiscoverySetMaintenance\n");
+		ast_log(LOG_ERROR, "Unable to register manager action DiscoverySetMaintenance\\n");
 		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	load_config(0);
-	discover_ari_settings();
+	// Register our HTTP URI handler
+	ast_log(LOG_NOTICE, "Attempting to link HTTP URI handler for: %s\\n", EID_CHECK_URI.uri);
+	ast_log(LOG_NOTICE, "  EID_CHECK_URI details before link: uri='%s', callback=%p\\n", EID_CHECK_URI.uri, (void *)EID_CHECK_URI.callback);
+	ret = ast_http_uri_link(&EID_CHECK_URI);
+	if (ret) { // ast_http_uri_link returns 0 on success, non-zero on failure
+		ast_log(LOG_ERROR, "Failed to link Consul EID check HTTP URI handler. ast_http_uri_link returned: %d\\n", ret);
+		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+		ast_manager_unregister("DiscoverySetMaintenance");
+		return AST_MODULE_LOAD_FAILURE;
+	}
+	ast_log(LOG_NOTICE, "Successfully registered HTTP EID check at %s\\n", EID_CHECK_URI.uri);
+
 
 	if (load_res(1)) {
-		ast_log(LOG_WARNING, "Failed to register with Consul\n");
+		ast_log(LOG_WARNING, "Failed to register with Consul\\n");
+		// Optionally, decide if this is fatal. For now, module load will continue.
 	} else {
-		ast_log(LOG_NOTICE, "Successfully registered with Consul\n");
+		ast_log(LOG_NOTICE, "Successfully registered with Consul\\n");
 	}
 
 	return AST_MODULE_LOAD_SUCCESS;
@@ -1176,3 +1307,4 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Discovery CONSU
 	.unload = unload_module,
 	.reload = reload_module,
 );
+
