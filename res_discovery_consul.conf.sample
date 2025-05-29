@@ -1,16 +1,87 @@
+;
+; Sample configuration for res_discovery_consul
+; Enhanced with metadata profile support for generic telecom platforms
+;
+
 [general]
-enabled=true
+; Enable or disable the consul discovery module
+enabled=yes
 
 [consul]
-id=auto ;set id or auto to generate it, or asterisk to use the asterisk ID
-name=asterisk ;set name or auto to discovery with hostname
-host=consul
+; Consul agent connection settings
+host=127.0.0.1
 port=8500
-token=the_one_ring
-tags=asterisk
-discovery_ip=auto ;set ip or auto to discovery the ip
+token=your-consul-token-here
+
+; Service registration details
+id=asterisk-voice-01
+name=Asterisk-Voice-Primary
+discovery_ip=auto
 discovery_port=5060
-discovery_interface=eth0 ;only use if discovery_ip is auto
-check=true
-check_http_port=8888
-check_interval=10s
+discovery_interface=eth0
+tags=asterisk,voice,production
+
+; Reference to metadata profile for telecom routing integration
+metadata_profile=voice_primary_us_east
+
+; Health check settings
+check=yes
+check_http_port=8088
+check_interval=15s
+check_timeout=3s
+check_deregister_after=30s
+
+; Advanced settings
+consul_timeout_ms=2000
+
+;
+; Metadata Profiles for Telecom Routing Integration
+; ================================================
+; These profiles define business-level routing metadata that will be
+; sent to Consul and consumed by SIP proxy/dispatcher modules.
+;
+
+; Primary voice service profile
+[metadata_voice_primary_us_east]
+; Group configuration as JSON object with ID and human-readable name
+group={"id": 1, "name": "voice-primary-us-east"}
+; Priority for routing (lower = higher priority)
+priority=0
+; Weight for load balancing (0 = equal distribution)
+weight=100
+; Maximum concurrent calls (0 or "unlimited" for no limit)
+max_calls=50
+; Dispatcher flags (0 = active)
+flags=0
+
+; Secondary voice service profile
+[metadata_voice_secondary_eu_west]
+group={"id": 2, "name": "voice-secondary-eu-west"}
+priority=10
+weight=80
+max_calls=30
+flags=0
+
+; Conference service profile
+[metadata_conference]
+group={"id": 3, "name": "conference"}
+priority=5
+weight=0
+max_calls=100
+flags=0
+
+; IVR service profile
+[metadata_ivr]
+group={"id": 4, "name": "ivr"}
+priority=15
+weight=0
+max_calls=unlimited
+flags=0
+
+; Development/testing profile
+[metadata_dev]
+group={"id": 99, "name": "development"}
+priority=99
+weight=0
+max_calls=10
+flags=0

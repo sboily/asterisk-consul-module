@@ -164,6 +164,19 @@ struct discovery_config {
 	char ari_scheme[16];
 	char check_timeout[16];
 	char check_deregister_after[16];
+	/* New metadata profile support */
+	char metadata_profile[64];  /* Profile name reference */
+};
+
+/* Metadata profile structure for generic telecom routing fields */
+struct metadata_profile {
+	char profile_name[64];
+	char group[256];         /* JSON string: {"id": 1, "name": "voice-primary"} */
+	char priority[16];       /* String: "0" */
+	char weight[16];         /* String: "100" */
+	char max_calls[16];      /* String: "50" or "unlimited" */
+	char flags[16];          /* String: "0" */
+	int valid;               /* 1 if profile was loaded successfully */
 };
 
 static struct discovery_config global_config = {
@@ -185,6 +198,17 @@ static struct discovery_config global_config = {
 	.ari_scheme = "",
 	.check_timeout = "3s",
 	.check_deregister_after = "30s",
+	.metadata_profile = "",      /* No profile by default */
+};
+
+static struct metadata_profile global_metadata = {
+	.profile_name = "",
+	.group = "",
+	.priority = "0",         /* Default priority */
+	.weight = "0",           /* Default weight (equal distribution) */
+	.max_calls = "0",        /* Default unlimited */
+	.flags = "0",            /* Default flags */
+	.valid = 0               /* Not loaded by default */
 };
 
 static const char config_file[] = "res_discovery_consul.conf";
@@ -285,6 +309,7 @@ static int discovery_ip_address(void);
 static int discovery_hostname(void);
 static int generate_uuid_id_consul(void);
 static int discover_ari_settings(void);
+static int load_metadata_profile(struct ast_config *cfg);
 
 /* Manager Handler Prototype */
 static int manager_maintenance(struct mansession *s, const struct message *m);
@@ -388,6 +413,40 @@ static struct ast_json *consul_put_json(void) {
 	}
 	if (!ast_strlen_zero(global_config.ari_scheme)) {
 		ast_json_object_set(meta, "ari_scheme", ast_json_string_create(global_config.ari_scheme));
+	}
+
+	/* Add generic telecom metadata from loaded profile */
+	if (global_metadata.valid) {
+		ast_debug(1, "Adding telecom routing metadata from profile '%s'\n", global_metadata.profile_name);
+		
+		if (!ast_strlen_zero(global_metadata.group)) {
+			ast_json_object_set(meta, "group", ast_json_string_create(global_metadata.group));
+			ast_debug(1, "Added group: %s\n", global_metadata.group);
+		}
+		
+		if (!ast_strlen_zero(global_metadata.priority)) {
+			ast_json_object_set(meta, "priority", ast_json_string_create(global_metadata.priority));
+			ast_debug(1, "Added priority: %s\n", global_metadata.priority);
+		}
+		
+		if (!ast_strlen_zero(global_metadata.weight)) {
+			ast_json_object_set(meta, "weight", ast_json_string_create(global_metadata.weight));
+			ast_debug(1, "Added weight: %s\n", global_metadata.weight);
+		}
+		
+		if (!ast_strlen_zero(global_metadata.max_calls)) {
+			ast_json_object_set(meta, "max_calls", ast_json_string_create(global_metadata.max_calls));
+			ast_debug(1, "Added max_calls: %s\n", global_metadata.max_calls);
+		}
+		
+		if (!ast_strlen_zero(global_metadata.flags)) {
+			ast_json_object_set(meta, "flags", ast_json_string_create(global_metadata.flags));
+			ast_debug(1, "Added flags: %s\n", global_metadata.flags);
+		}
+		
+		ast_log(LOG_NOTICE, "Successfully added telecom routing metadata from profile '%s' to service registration\n", global_metadata.profile_name);
+	} else {
+		ast_debug(1, "No valid metadata profile loaded, skipping telecom routing metadata\n");
 	}
 
 	ast_json_object_set(obj, "Meta", ast_json_ref(meta));
@@ -727,6 +786,9 @@ static void load_config(int reload)
 			ast_copy_string(global_config.discovery_interface, v->value, sizeof(global_config.discovery_interface));
 		} else if (!strcasecmp(v->name, "token")) {
 			ast_copy_string(global_config.token, v->value, sizeof(global_config.token));
+		} else if (!strcasecmp(v->name, "metadata_profile")) {
+			ast_copy_string(global_config.metadata_profile, v->value, sizeof(global_config.metadata_profile));
+			ast_debug(1, "Set metadata profile: %s\n", global_config.metadata_profile);
 		} else if (!strcasecmp(v->name, "check")) {
 			if (ast_true(v->value) == 0) {
 				check = 0;
@@ -752,9 +814,14 @@ static void load_config(int reload)
 			ast_copy_string(global_config.check_timeout, v->value, sizeof(global_config.check_timeout));
 		} else if (!strcasecmp(v->name, "check_deregister_after")) {
 			ast_copy_string(global_config.check_deregister_after, v->value, sizeof(global_config.check_deregister_after));
-		} else if (strcasecmp(v->name, "enabled") != 0 && strcasecmp(v->name, "description") != 0) {
+		} else {
 			ast_log(LOG_WARNING, "Unknown option in %s: %s\n", config_file, v->name);
 		}
+	}
+
+	/* Load metadata profile after parsing consul section */
+	if (load_metadata_profile(cfg) != 0) {
+		ast_log(LOG_WARNING, "Failed to load metadata profile\n");
 	}
 
 	ast_config_destroy(cfg);
@@ -970,6 +1037,28 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	ast_cli(a->fd, "Check interval: %s\n", global_config.check_interval);
 	ast_cli(a->fd, "Check timeout: %s\n", global_config.check_timeout);
 	ast_cli(a->fd, "Check deregister after: %s\n\n", global_config.check_deregister_after);
+	
+	/* Display metadata profile information */
+	ast_cli(a->fd, "Metadata Profile Settings:\n");
+	ast_cli(a->fd, "--------------------------\n");
+	if (!ast_strlen_zero(global_config.metadata_profile)) {
+		ast_cli(a->fd, "Profile name: %s\n", global_config.metadata_profile);
+		if (global_metadata.valid) {
+			ast_cli(a->fd, "Profile status: Loaded successfully\n");
+			ast_cli(a->fd, "Group: %s\n", !ast_strlen_zero(global_metadata.group) ? global_metadata.group : "(not set)");
+			ast_cli(a->fd, "Priority: %s\n", global_metadata.priority);
+			ast_cli(a->fd, "Weight: %s\n", global_metadata.weight);
+			ast_cli(a->fd, "Max Calls: %s\n", global_metadata.max_calls);
+			ast_cli(a->fd, "Flags: %s\n", global_metadata.flags);
+		} else {
+			ast_cli(a->fd, "Profile status: Failed to load\n");
+		}
+	} else {
+		ast_cli(a->fd, "Profile name: (none configured)\n");
+		ast_cli(a->fd, "Profile status: No metadata profile configured\n");
+	}
+	ast_cli(a->fd, "\n");
+	
 	ast_cli(a->fd, "----\n");
 
 	return NULL;
@@ -1156,112 +1245,6 @@ static struct ast_cli_entry cli_discovery[] = {
 };
 
 /*!
- * \brief Function called to reload the module
- *
- * This function reloads the module and updates the global configuration
- * based on the values found in the file.
- */
-static int reload_module(void)
-{
-	ast_debug(1, "Reloading res_discovery_consul module\n");
-
-	if (global_config.enabled) {
-		ast_debug(1, "Deregistering service %s due to reload\n", global_config.id);
-		load_res(0);
-	}
-
-	load_config(1);
-
-	if (global_config.enabled) {
-		ast_debug(1, "Attempting to register service %s with new configuration after reload\n", global_config.id);
-		if (load_res(1)) {
-			ast_log(LOG_WARNING, "Failed to register with Consul after reload with new configuration\n");
-		} else {
-			ast_debug(1, "Successfully re-registered with Consul after reload.\n");
-		}
-	} else {
-		ast_debug(1, "Module is disabled after reload. Not registering with Consul.\n");
-	}
-	return 0;
-}
-
-/*!
- * \brief Function called to unload the module
- *
- * This function unloads the module and updates the global configuration
- * based on the values found in the file.
- */
-static int unload_module(void)
-{
-	if (global_config.enabled) {
-		load_res(0);
-	}
-	ast_http_uri_unlink(&EID_CHECK_URI);
-	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
-	ast_manager_unregister("DiscoverySetMaintenance");
-	return 0;
-}
-
-/*!
- * \brief Function called to load the module
- *
- * This function loads the module and updates the global configuration
- * based on the values found in the file.
- */
-static int load_module(void)
-{
-	int ret;
-
-	if (!ast_module_check("res_curl.so")) {
-		if (ast_load_resource("res_curl.so") != AST_MODULE_LOAD_SUCCESS) {
-			ast_log(LOG_ERROR, "Cannot load res_curl, so res_discovery_consul cannot be loaded\\n");
-			return AST_MODULE_LOAD_DECLINE;
-		}
-	}
-
-	// Configuration settings load first
-	load_config(0);
-	discover_ari_settings(); // Discover ARI settings after loading config
-
-	if (global_config.enabled != 1) { // Check enabled status after loading config
-		ast_log(LOG_NOTICE, "res_discovery_consul module is disabled in configuration.\\n");
-		return AST_MODULE_LOAD_DECLINE;
-	}
-
-	if (ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery))) {
-		return AST_MODULE_LOAD_FAILURE;
-	}
-
-	if (ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance)) {
-		ast_log(LOG_ERROR, "Unable to register manager action DiscoverySetMaintenance\\n");
-		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
-		return AST_MODULE_LOAD_FAILURE;
-	}
-
-	// Register our HTTP URI handler
-	ast_log(LOG_NOTICE, "Attempting to link HTTP URI handler for: %s\\n", EID_CHECK_URI.uri);
-	ast_log(LOG_NOTICE, "  EID_CHECK_URI details before link: uri='%s', callback=%p\\n", EID_CHECK_URI.uri, (void *)EID_CHECK_URI.callback);
-	ret = ast_http_uri_link(&EID_CHECK_URI);
-	if (ret) { // ast_http_uri_link returns 0 on success, non-zero on failure
-		ast_log(LOG_ERROR, "Failed to link Consul EID check HTTP URI handler. ast_http_uri_link returned: %d\\n", ret);
-		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
-		ast_manager_unregister("DiscoverySetMaintenance");
-		return AST_MODULE_LOAD_FAILURE;
-	}
-	ast_log(LOG_NOTICE, "Successfully registered HTTP EID check at %s\\n", EID_CHECK_URI.uri);
-
-
-	if (load_res(1)) {
-		ast_log(LOG_WARNING, "Failed to register with Consul\\n");
-		// Optionally, decide if this is fatal. For now, module load will continue.
-	} else {
-		ast_log(LOG_NOTICE, "Successfully registered with Consul\\n");
-	}
-
-	return AST_MODULE_LOAD_SUCCESS;
-}
-
-/*!
  * \brief Function called to manager maintenance
  *
  * This function manages the maintenance of the service in Consul.
@@ -1296,6 +1279,74 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 }
 
 /*!
+ * \brief Module load function
+ */
+static int load_module(void)
+{
+	// Configuration settings load first
+	load_config(0);
+	discover_ari_settings(); // Discover ARI settings after loading config
+
+	if (global_config.enabled != 1) { // Check enabled status after loading config
+		ast_log(LOG_NOTICE, "res_discovery_consul module is disabled in configuration.\n");
+		return AST_MODULE_LOAD_DECLINE;
+	}
+
+	if (ast_cli_register_multiple(cli_discovery, ARRAY_LEN(cli_discovery))) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (ast_manager_register_xml("DiscoverySetMaintenance", EVENT_FLAG_SYSTEM, manager_maintenance)) {
+		ast_log(LOG_ERROR, "Unable to register manager action DiscoverySetMaintenance\n");
+		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	// Register our HTTP URI handler
+	ast_log(LOG_NOTICE, "Attempting to link HTTP URI handler for: %s\n", EID_CHECK_URI.uri);
+	ast_log(LOG_NOTICE, "  EID_CHECK_URI details before link: uri='%s', callback=%p\n", EID_CHECK_URI.uri, (void *)EID_CHECK_URI.callback);
+	if (ast_http_uri_link(&EID_CHECK_URI)) { // ast_http_uri_link returns 0 on success, non-zero on failure
+		ast_log(LOG_ERROR, "Failed to link Consul EID check HTTP URI handler\n");
+		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+		ast_manager_unregister("DiscoverySetMaintenance");
+		return AST_MODULE_LOAD_FAILURE;
+	}
+	ast_log(LOG_NOTICE, "Successfully registered HTTP EID check at %s\n", EID_CHECK_URI.uri);
+
+	if (load_res(1)) {
+		ast_log(LOG_WARNING, "Failed to register with Consul\n");
+		// Optionally, decide if this is fatal. For now, module load will continue.
+	} else {
+		ast_log(LOG_NOTICE, "Successfully registered with Consul\n");
+	}
+
+	return AST_MODULE_LOAD_SUCCESS;
+}
+
+/*!
+ * \brief Module unload function
+ */
+static int unload_module(void)
+{
+	ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
+	ast_manager_unregister("DiscoverySetMaintenance");
+	ast_http_uri_unlink(&EID_CHECK_URI);
+
+	return load_res(0);
+}
+
+/*!
+ * \brief Module reload function
+ */
+static int reload_module(void)
+{
+	load_config(1);
+	discover_ari_settings();
+	
+	return load_res(1);
+}
+
+/*!
  * \brief Function called to define the module
  *
  * This function defines the module and updates the global configuration
@@ -1308,3 +1359,67 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Discovery CONSU
 	.reload = reload_module,
 );
 
+/*!
+ * \brief Load metadata profile from configuration
+ *
+ * This function loads the metadata profile specified in global_config.metadata_profile
+ * from the configuration file. The profile section name is "metadata_" + profile_name.
+ *
+ * \param cfg The configuration object
+ * \return 0 on success, -1 on failure
+ */
+static int load_metadata_profile(struct ast_config *cfg)
+{
+	struct ast_variable *v;
+	char section_name[128];
+	
+	/* Initialize metadata with defaults */
+	global_metadata.valid = 0;
+	ast_copy_string(global_metadata.profile_name, "", sizeof(global_metadata.profile_name));
+	ast_copy_string(global_metadata.group, "", sizeof(global_metadata.group));
+	ast_copy_string(global_metadata.priority, "0", sizeof(global_metadata.priority));
+	ast_copy_string(global_metadata.weight, "0", sizeof(global_metadata.weight));
+	ast_copy_string(global_metadata.max_calls, "0", sizeof(global_metadata.max_calls));
+	ast_copy_string(global_metadata.flags, "0", sizeof(global_metadata.flags));
+	
+	/* If no metadata profile specified, return success with defaults */
+	if (ast_strlen_zero(global_config.metadata_profile)) {
+		ast_debug(1, "No metadata profile specified, using defaults\n");
+		return 0;
+	}
+	
+	/* Construct section name: "metadata_" + profile_name */
+	snprintf(section_name, sizeof(section_name), "metadata_%s", global_config.metadata_profile);
+	
+	ast_debug(1, "Loading metadata profile from section [%s]\n", section_name);
+	
+	/* Parse metadata profile section */
+	for (v = ast_variable_browse(cfg, section_name); v; v = v->next) {
+		if (!strcasecmp(v->name, "group")) {
+			ast_copy_string(global_metadata.group, v->value, sizeof(global_metadata.group));
+			ast_debug(1, "Loaded group: %s\n", global_metadata.group);
+		} else if (!strcasecmp(v->name, "priority")) {
+			ast_copy_string(global_metadata.priority, v->value, sizeof(global_metadata.priority));
+			ast_debug(1, "Loaded priority: %s\n", global_metadata.priority);
+		} else if (!strcasecmp(v->name, "weight")) {
+			ast_copy_string(global_metadata.weight, v->value, sizeof(global_metadata.weight));
+			ast_debug(1, "Loaded weight: %s\n", global_metadata.weight);
+		} else if (!strcasecmp(v->name, "max_calls")) {
+			ast_copy_string(global_metadata.max_calls, v->value, sizeof(global_metadata.max_calls));
+			ast_debug(1, "Loaded max_calls: %s\n", global_metadata.max_calls);
+		} else if (!strcasecmp(v->name, "flags")) {
+			ast_copy_string(global_metadata.flags, v->value, sizeof(global_metadata.flags));
+			ast_debug(1, "Loaded flags: %s\n", global_metadata.flags);
+		} else {
+			ast_log(LOG_WARNING, "Unknown option in metadata profile [%s]: %s\n", section_name, v->name);
+		}
+	}
+	
+	/* Mark profile as successfully loaded */
+	ast_copy_string(global_metadata.profile_name, global_config.metadata_profile, sizeof(global_metadata.profile_name));
+	global_metadata.valid = 1;
+	
+	ast_log(LOG_NOTICE, "Successfully loaded metadata profile '%s'\n", global_config.metadata_profile);
+	
+	return 0;
+}
