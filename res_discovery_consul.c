@@ -213,10 +213,13 @@ static struct metadata_profile global_metadata = {
 
 static const char config_file[] = "res_discovery_consul.conf";
 
-// HTTP Callback function for EID check
+/* Mutex for thread-safe access to global_config and global_metadata */
+AST_MUTEX_DEFINE_STATIC(config_lock);
+
+/* HTTP Callback function for EID check */
 static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
                                  const struct ast_http_uri *urih,
-                                 const char *uri_path, 
+                                 const char *uri_path,
                                  enum ast_http_method method,
                                  struct ast_variable *get_params,
                                  struct ast_variable *headers)
@@ -224,6 +227,9 @@ static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
 	struct ast_variable *param;
 	const char *expected_eid = NULL;
 	char response_text[560];
+	char local_id[256];
+	struct ast_str *body_str = NULL;
+	struct ast_str *headers_str = NULL;
 
 	ast_debug(3, "HTTP EID Check: Callback entered. URI path: '%s', Method: %d\n", uri_path ? uri_path : "(null)", method);
 
@@ -234,7 +240,7 @@ static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
 
 	if (method != AST_HTTP_GET) {
 		ast_http_error(ser, 405, "Method Not Allowed", "Only GET is allowed for this endpoint.");
-		return 0; 
+		return 0;
 	}
 
 	for (param = get_params; param; param = param->next) {
@@ -250,18 +256,20 @@ static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
 		return 0;
 	}
 
+	/* Lock config for thread-safe access to global_config.id */
+	ast_mutex_lock(&config_lock);
 	if (ast_strlen_zero(global_config.id)) {
+		ast_mutex_unlock(&config_lock);
 		ast_log(LOG_ERROR, "HTTP EID Check: global_config.id is empty! Cannot perform EID comparison.\n");
 		ast_http_error(ser, 500, "Internal Server Error", "Server configuration error: instance EID not set.");
 		return 0;
 	}
+	ast_copy_string(local_id, global_config.id, sizeof(local_id));
+	ast_mutex_unlock(&config_lock);
 
-	if (strcmp(global_config.id, expected_eid) == 0) {
-		snprintf(response_text, sizeof(response_text), "OK - EID Match: %s", global_config.id);
-		ast_debug(1, "HTTP EID Check: Match for EID '%s'. Responding 200 OK.\n", global_config.id);
-
-		struct ast_str *body_str = NULL;
-		struct ast_str *headers_str = NULL;
+	if (strcmp(local_id, expected_eid) == 0) {
+		snprintf(response_text, sizeof(response_text), "OK - EID Match: %s", local_id);
+		ast_debug(1, "HTTP EID Check: Match for EID '%s'. Responding 200 OK.\n", local_id);
 
 		body_str = ast_str_create(strlen(response_text) + 16);
 		headers_str = ast_str_create(128);
@@ -270,7 +278,7 @@ static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
 			ast_str_set(&body_str, 0, "%s", response_text);
 			ast_str_set(&headers_str, 0, "Content-Type: text/plain; charset=utf-8\r\n\r\n");
 
-			ast_http_send(ser, method, 200, "OK", headers_str, body_str, -1, 0); 
+			ast_http_send(ser, method, 200, "OK", headers_str, body_str, -1, 0);
 			body_str = NULL;
 			headers_str = NULL;
 		} else {
@@ -284,14 +292,14 @@ static int handle_http_check_eid(struct ast_tcptls_session_instance *ser,
 			ast_http_error(ser, 500, "Internal Server Error", "Failed to allocate response buffer.");
 		}
 	} else {
-		snprintf(response_text, sizeof(response_text), "EID Mismatch. Expected: %s, Instance has: %s", expected_eid, global_config.id);
-		ast_log(LOG_NOTICE, "HTTP EID Check: Mismatch. Expected EID: '%s', Instance EID: '%s'. Responding 404 Not Found.\n", expected_eid, global_config.id);
+		snprintf(response_text, sizeof(response_text), "EID Mismatch. Expected: %s, Instance has: %s", expected_eid, local_id);
+		ast_log(LOG_NOTICE, "HTTP EID Check: Mismatch. Expected EID: '%s', Instance EID: '%s'. Responding 404 Not Found.\n", expected_eid, local_id);
 		ast_http_error(ser, 404, "Not Found", response_text);
 	}
-	return 0; 
+	return 0;
 }
 
-// HTTP URI handler structure for EID check
+/* HTTP URI handler structure for EID check */
 static struct ast_http_uri EID_CHECK_URI = {
 	.uri = "consul_check", 
 	.description = "Consul EID Check for res_discovery_consul",
@@ -472,7 +480,13 @@ static struct ast_json *consul_put_json(void) {
 		ast_json_object_set(check, "DeregisterCriticalServiceAfter", ast_json_string_create(global_config.check_deregister_after));
 	}
 
-	ast_debug(1, "The json object created: %s\n", ast_json_dump_string_format(obj, AST_JSON_COMPACT));
+	{
+		char *json_debug = ast_json_dump_string_format(obj, AST_JSON_COMPACT);
+		if (json_debug) {
+			ast_debug(1, "The json object created: %s\n", json_debug);
+			ast_json_free(json_debug);
+		}
+	}
 
 	return ast_json_ref(obj);
 }
@@ -499,13 +513,51 @@ static struct ast_json *consul_put_maintenance_json(void) {
 	return ast_json_ref(obj);
 }
 
-/*! \brief Function called to set headers for curl */
+/*!
+ * \brief Safely append a string to a curl_slist, handling allocation failures.
+ * \param list The existing list (can be NULL for first item)
+ * \param string The string to append
+ * \return The updated list, or NULL on failure (original list is freed on failure)
+ */
+static struct curl_slist *safe_slist_append(struct curl_slist *list, const char *string)
+{
+	struct curl_slist *tmp = curl_slist_append(list, string);
+	if (!tmp) {
+		ast_log(LOG_ERROR, "Failed to append header: %s\n", string);
+		curl_slist_free_all(list);
+		return NULL;
+	}
+	return tmp;
+}
+
+/*! \brief Function called to set headers for curl, including auth token if configured */
 static struct curl_slist *set_headers_json(void) {
 	struct curl_slist *headers = NULL;
 
-	headers = curl_slist_append(headers, "Accept: application/json");
-	headers = curl_slist_append(headers, "Content-Type: application/json");
-	headers = curl_slist_append(headers, "charsets: utf-8");
+	headers = safe_slist_append(headers, "Accept: application/json");
+	if (!headers) {
+		return NULL;
+	}
+
+	headers = safe_slist_append(headers, "Content-Type: application/json");
+	if (!headers) {
+		return NULL;
+	}
+
+	headers = safe_slist_append(headers, "charsets: utf-8");
+	if (!headers) {
+		return NULL;
+	}
+
+	/* Add Consul token as header instead of URL parameter for security */
+	if (!ast_strlen_zero(global_config.token)) {
+		char token_header[300];
+		snprintf(token_header, sizeof(token_header), "X-Consul-Token: %s", global_config.token);
+		headers = safe_slist_append(headers, token_header);
+		if (!headers) {
+			return NULL;
+		}
+	}
 
 	return headers;
 }
@@ -541,11 +593,13 @@ static CURLcode consul_deregister(CURL *curl)
 
 	set_base_url(&url, "/v1/agent/service/deregister");
 	ast_str_append(&url, 0, "/%s", global_config.id);
-	if (!ast_strlen_zero(global_config.token)) {
-		ast_str_append(&url, 0, "?token=%s", global_config.token);
-	}
+	/* Token is now sent via X-Consul-Token header in set_headers_json() */
 
 	headers = set_headers_json();
+	if (!headers) {
+		ast_log(LOG_ERROR, "Failed to create headers for deregister request\n");
+		return CURLE_OUT_OF_MEMORY;
+	}
 
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -589,20 +643,34 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 	struct curl_slist *headers = NULL;
 	struct ast_str *url = ast_str_alloca(MAX_URL_LENGTH);
 	struct ast_json *obj = NULL;
-	char *reason = curl_easy_escape(curl, "Maintenance activated by Asterisk module", 41);
+	const char *reason_str = "Maintenance activated by Asterisk module";
+	char *reason = curl_easy_escape(curl, reason_str, strlen(reason_str));
 	const char *json_str = NULL;
 	size_t json_len = 0;
 	char *allocated_buffer = NULL;
 
 	obj = consul_put_maintenance_json();
+	if (!obj) {
+		ast_log(LOG_ERROR, "Failed to create JSON for maintenance request\n");
+		if (reason) {
+			curl_free(reason);
+		}
+		return CURLE_OUT_OF_MEMORY;
+	}
 
 	set_base_url(&url, "/v1/agent/service/maintenance");
 	ast_str_append(&url, 0, "/%s?enable=%s&reason=%s", global_config.id, enable, reason);
-	if (!ast_strlen_zero(global_config.token)) {
-		ast_str_append(&url, 0, "&token=%s", global_config.token);
-	}
+	/* Token is now sent via X-Consul-Token header in set_headers_json() */
 
 	headers = set_headers_json();
+	if (!headers) {
+		ast_log(LOG_ERROR, "Failed to create headers for maintenance request\n");
+		ast_json_unref(obj);
+		if (reason) {
+			curl_free(reason);
+		}
+		return CURLE_OUT_OF_MEMORY;
+	}
 
 	json_str = ast_json_dump_string_format(obj, AST_JSON_COMPACT);
 	if (json_str) {
@@ -610,9 +678,9 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 		allocated_buffer = ast_strndup(json_str, json_len);
 		if (!allocated_buffer) {
 			ast_log(LOG_ERROR, "Failed to duplicate JSON string for Consul maintenance request\n");
-			ast_json_free(obj);
-			if (headers) { curl_slist_free_all(headers); }
-			if (reason) { curl_free(reason); }
+			ast_json_unref(obj);
+			curl_slist_free_all(headers);
+			curl_free(reason);
 			return CURLE_OUT_OF_MEMORY;
 		}
 		put_data.original_data_ptr = allocated_buffer;
@@ -620,8 +688,8 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 		put_data.remaining_size = json_len;
 	} else {
 		ast_log(LOG_WARNING, "JSON string for maintenance object is NULL\n");
+		/* Continue with empty body - Consul maintenance API doesn't require body */
 	}
-
 
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
@@ -635,9 +703,11 @@ static CURLcode consul_maintenance_service(CURL *curl, const char *enable)
 
 	rcode = curl_easy_perform(curl);
 
-	manager_event(EVENT_FLAG_SYSTEM, "DiscoverySetMaintenance", "Maintenance: %s\n", enable);
+	if (rcode == CURLE_OK) {
+		manager_event(EVENT_FLAG_SYSTEM, "DiscoverySetMaintenance", "Maintenance: %s\n", enable);
+	}
 
-	ast_json_free(obj);
+	ast_json_unref(obj);
 	curl_slist_free_all(headers);
 	curl_free(reason);
 	ast_free(put_data.original_data_ptr);
@@ -665,39 +735,40 @@ static CURLcode consul_register(CURL *curl)
 	char *allocated_buffer = NULL;
 
 	headers = set_headers_json();
-	obj = consul_put_json();
-
-	set_base_url(&url, "/v1/agent/service/register");
-	if (!ast_strlen_zero(global_config.token)) {
-		ast_str_append(&url, 0, "?token=%s", global_config.token);
-	}
-
-	if (obj) {
-		json_str = ast_json_dump_string_format(obj, AST_JSON_COMPACT);
-		if (json_str) {
-			json_len = strlen(json_str);
-			allocated_buffer = ast_strndup(json_str, json_len);
-			if (!allocated_buffer) {
-				ast_log(LOG_ERROR, "Failed to duplicate JSON string for Consul registration request\n");
-				ast_json_free(obj);
-				if (headers) { curl_slist_free_all(headers); }
-				return CURLE_OUT_OF_MEMORY;
-			}
-			put_data.original_data_ptr = allocated_buffer;
-			put_data.current_read_ptr = allocated_buffer;
-			put_data.remaining_size = json_len;
-		} else {
-			ast_log(LOG_ERROR, "JSON string for registration object is NULL\n");
-			put_data.remaining_size = 0; 
-		}
-	} else {
-		ast_log(LOG_ERROR, "Failed to create JSON for Consul registration\n");
-		if (headers) {
-			curl_slist_free_all(headers);
-		}
+	if (!headers) {
+		ast_log(LOG_ERROR, "Failed to create headers for registration request\n");
 		return CURLE_OUT_OF_MEMORY;
 	}
 
+	obj = consul_put_json();
+	if (!obj) {
+		ast_log(LOG_ERROR, "Failed to create JSON for Consul registration\n");
+		curl_slist_free_all(headers);
+		return CURLE_OUT_OF_MEMORY;
+	}
+
+	set_base_url(&url, "/v1/agent/service/register");
+	/* Token is now sent via X-Consul-Token header in set_headers_json() */
+
+	json_str = ast_json_dump_string_format(obj, AST_JSON_COMPACT);
+	if (json_str) {
+		json_len = strlen(json_str);
+		allocated_buffer = ast_strndup(json_str, json_len);
+		if (!allocated_buffer) {
+			ast_log(LOG_ERROR, "Failed to duplicate JSON string for Consul registration request\n");
+			ast_json_unref(obj);
+			curl_slist_free_all(headers);
+			return CURLE_OUT_OF_MEMORY;
+		}
+		put_data.original_data_ptr = allocated_buffer;
+		put_data.current_read_ptr = allocated_buffer;
+		put_data.remaining_size = json_len;
+	} else {
+		ast_log(LOG_ERROR, "JSON string for registration object is NULL\n");
+		ast_json_unref(obj);
+		curl_slist_free_all(headers);
+		return CURLE_OUT_OF_MEMORY;
+	}
 
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
@@ -713,9 +784,18 @@ static CURLcode consul_register(CURL *curl)
 
 	rcode = curl_easy_perform(curl);
 
-	manager_event(EVENT_FLAG_SYSTEM, "DiscoveryRegister", NULL);
+	/* Only fire event on successful registration */
+	if (rcode == CURLE_OK) {
+		long http_code = 0;
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		if (http_code >= 200 && http_code < 300) {
+			manager_event(EVENT_FLAG_SYSTEM, "DiscoveryRegister", NULL);
+		} else {
+			ast_log(LOG_WARNING, "Consul registration failed with HTTP status %ld\n", http_code);
+		}
+	}
 
-	ast_json_free(obj);
+	ast_json_unref(obj);
 	curl_slist_free_all(headers);
 	ast_free(put_data.original_data_ptr);
 
@@ -731,15 +811,9 @@ static CURLcode consul_register(CURL *curl)
 static void load_config(int reload)
 {
 	struct ast_config *cfg = NULL;
-
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_variable *v;
 	char *endptr;
-
-	int enabled, check;
-
-	enabled = 1;
-	check = 1;
 
 	if (!(cfg = ast_config_load(config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "res_discovery_consul configuration file '%s' not found\n", config_file);
@@ -748,12 +822,12 @@ static void load_config(int reload)
 		return;
 	}
 
+	/* Lock config for thread-safe updates */
+	ast_mutex_lock(&config_lock);
+
 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {
 		if (!strcasecmp(v->name, "enabled")) {
-			if (ast_true(v->value) == 0) {
-				enabled = 0;
-			}
-			global_config.enabled = enabled;
+			global_config.enabled = ast_true(v->value) ? 1 : 0;
 		}
 	}
 
@@ -790,10 +864,7 @@ static void load_config(int reload)
 			ast_copy_string(global_config.metadata_profile, v->value, sizeof(global_config.metadata_profile));
 			ast_debug(1, "Set metadata profile: %s\n", global_config.metadata_profile);
 		} else if (!strcasecmp(v->name, "check")) {
-			if (ast_true(v->value) == 0) {
-				check = 0;
-			}
-			global_config.check = check;
+			global_config.check = ast_true(v->value) ? 1 : 0;
 		} else if (!strcasecmp(v->name, "check_http_port")) {
 			long val = strtol(v->value, &endptr, 10);
 			if (*endptr == '\0' && val > 0 && val <= 65535) {
@@ -824,9 +895,9 @@ static void load_config(int reload)
 		ast_log(LOG_WARNING, "Failed to load metadata profile\n");
 	}
 
-	ast_config_destroy(cfg);
+	ast_mutex_unlock(&config_lock);
 
-	return;
+	ast_config_destroy(cfg);
 }
 
 /*!
@@ -857,7 +928,7 @@ static int discovery_ip_address(void)
 	}
 	close(fd);
 
-	sprintf(host, "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
+	snprintf(host, sizeof(host), "%s", ast_inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
 	ast_copy_string(global_config.discovery_ip, host, sizeof(global_config.discovery_ip));
 
 	ast_debug(1,"Discovery IP: %s\n", host);
@@ -906,63 +977,64 @@ static int generate_uuid_id_consul(void)
 	return 0;
 }
 
-static int discover_ari_settings(void) {
-    struct ast_config *http_cfg;
-    struct ast_variable *v;
-    const char *http_conf_file = "http.conf";
-    int http_enabled = 0;
-    const char *port_str = NULL;
-    int tls_enabled = 0;
-    struct ast_flags config_load_flags = { CONFIG_FLAG_NOCACHE }; 
+static int discover_ari_settings(void)
+{
+	struct ast_config *http_cfg;
+	struct ast_variable *v;
+	const char *http_conf_file = "http.conf";
+	int http_enabled = 0;
+	const char *port_str = NULL;
+	int tls_enabled = 0;
+	struct ast_flags config_load_flags = { CONFIG_FLAG_NOCACHE };
 
-    ast_copy_string(global_config.ari_port, "", sizeof(global_config.ari_port));
-    ast_copy_string(global_config.ari_scheme, "", sizeof(global_config.ari_scheme));
+	ast_copy_string(global_config.ari_port, "", sizeof(global_config.ari_port));
+	ast_copy_string(global_config.ari_scheme, "", sizeof(global_config.ari_scheme));
 
-    http_cfg = ast_config_load(http_conf_file, config_load_flags);
-    if (!http_cfg || http_cfg == CONFIG_STATUS_FILEINVALID || http_cfg == CONFIG_STATUS_FILEUNCHANGED) {
-        ast_log(LOG_NOTICE, "Could not load '%s' for HTTP settings discovery. HTTP metadata will be omitted.\n", http_conf_file);
-        if (http_cfg && http_cfg != CONFIG_STATUS_FILEINVALID && http_cfg != CONFIG_STATUS_FILEUNCHANGED) {
-            ast_config_destroy(http_cfg);
-        }
-        return -1;
-    }
+	http_cfg = ast_config_load(http_conf_file, config_load_flags);
+	if (!http_cfg || http_cfg == CONFIG_STATUS_FILEINVALID || http_cfg == CONFIG_STATUS_FILEUNCHANGED) {
+		ast_log(LOG_NOTICE, "Could not load '%s' for HTTP settings discovery. HTTP metadata will be omitted.\n", http_conf_file);
+		if (http_cfg && http_cfg != CONFIG_STATUS_FILEINVALID && http_cfg != CONFIG_STATUS_FILEUNCHANGED) {
+			ast_config_destroy(http_cfg);
+		}
+		return -1;
+	}
 
-    for (v = ast_variable_browse(http_cfg, "general"); v; v = v->next) {
-        if (!strcasecmp(v->name, "enabled")) {
-            if (ast_true(v->value)) {
-                http_enabled = 1;
-            }
-        } else if (!strcasecmp(v->name, "bindport")) {
-            port_str = v->value;
-        } else if (!strcasecmp(v->name, "tlsenable")) {
-            if (ast_true(v->value)) {
-                tls_enabled = 1;
-            }
-        }
-    }
+	for (v = ast_variable_browse(http_cfg, "general"); v; v = v->next) {
+		if (!strcasecmp(v->name, "enabled")) {
+			if (ast_true(v->value)) {
+				http_enabled = 1;
+			}
+		} else if (!strcasecmp(v->name, "bindport")) {
+			port_str = v->value;
+		} else if (!strcasecmp(v->name, "tlsenable")) {
+			if (ast_true(v->value)) {
+				tls_enabled = 1;
+			}
+		}
+	}
 
-    if (!http_enabled) {
-        ast_log(LOG_DEBUG, "HTTP is not enabled in '%s'. HTTP metadata will be omitted.\n", http_conf_file);
-        ast_config_destroy(http_cfg);
-        return 0;
-    }
+	if (!http_enabled) {
+		ast_log(LOG_DEBUG, "HTTP is not enabled in '%s'. HTTP metadata will be omitted.\n", http_conf_file);
+		ast_config_destroy(http_cfg);
+		return 0;
+	}
 
-    if (port_str) {
-        ast_copy_string(global_config.ari_port, port_str, sizeof(global_config.ari_port));
-        ast_debug(1, "Discovered HTTP Port: %s\n", global_config.ari_port);
-    } else {
-        ast_log(LOG_WARNING, "HTTP port not found in '%s'. HTTP port metadata will be omitted.\n", http_conf_file);
-    }
+	if (port_str) {
+		ast_copy_string(global_config.ari_port, port_str, sizeof(global_config.ari_port));
+		ast_debug(1, "Discovered HTTP Port: %s\n", global_config.ari_port);
+	} else {
+		ast_log(LOG_WARNING, "HTTP port not found in '%s'. HTTP port metadata will be omitted.\n", http_conf_file);
+	}
 
-    if (tls_enabled) {
-        ast_copy_string(global_config.ari_scheme, "https", sizeof(global_config.ari_scheme));
-    } else {
-        ast_copy_string(global_config.ari_scheme, "http", sizeof(global_config.ari_scheme));
-    }
-    ast_debug(1, "Discovered ARI Scheme: %s\n", global_config.ari_scheme);
+	if (tls_enabled) {
+		ast_copy_string(global_config.ari_scheme, "https", sizeof(global_config.ari_scheme));
+	} else {
+		ast_copy_string(global_config.ari_scheme, "http", sizeof(global_config.ari_scheme));
+	}
+	ast_debug(1, "Discovered ARI Scheme: %s\n", global_config.ari_scheme);
 
-    ast_config_destroy(http_cfg);
-    return 0;
+	ast_config_destroy(http_cfg);
+	return 0;
 }
 
 /*!
@@ -975,9 +1047,11 @@ static int load_res(int start)
 {
 	CURL *curl;
 	CURLcode rcode;
+	int ret = 0;
 
 	curl = curl_easy_init();
 	if (!curl) {
+		ast_log(LOG_ERROR, "Failed to initialize cURL handle\n");
 		return -1;
 	}
 
@@ -989,11 +1063,12 @@ static int load_res(int start)
 
 	if (rcode != CURLE_OK) {
 		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+		ret = -1;
 	}
- 
+
 	curl_easy_cleanup(curl);
 
-	return 0;
+	return ret;
 }
 
 /*!
@@ -1031,7 +1106,7 @@ static char *discovery_cli_settings(struct ast_cli_entry *e, int cmd, struct ast
 	ast_cli(a->fd, "Consul Settings:\n");
 	ast_cli(a->fd, "----------------\n");
 	ast_cli(a->fd, "Connection: %s:%d\n", global_config.host, global_config.port);
-	ast_cli(a->fd, "Token: %s\n", global_config.token);
+	ast_cli(a->fd, "Token: %s\n", ast_strlen_zero(global_config.token) ? "(not set)" : "********");
 	ast_cli(a->fd, "Check: %d\n", global_config.check);
 	ast_cli(a->fd, "Check http port: %d\n\n", global_config.check_http_port);
 	ast_cli(a->fd, "Check interval: %s\n", global_config.check_interval);
@@ -1181,13 +1256,27 @@ static char *discovery_cli_show_status(struct ast_cli_entry *e, int cmd, struct 
 		return CLI_SUCCESS;
 	}
 
-	if (!ast_strlen_zero(global_config.token)) {
-		ast_str_set(&url, 0, "%s?token=%s", service_health_url, global_config.token);
-	} else {
-		ast_str_set(&url, 0, "%s", service_health_url);
+	ast_str_set(&url, 0, "%s", service_health_url);
+
+	/* Build headers including token if configured */
+	headers = safe_slist_append(NULL, "Accept: application/json");
+	if (!headers) {
+		ast_cli(a->fd, "Consul Live Status: Failed to create request headers.\n");
+		curl_easy_cleanup(curl_handle);
+		return CLI_FAILURE;
 	}
 
-	headers = curl_slist_append(NULL, "Accept: application/json");
+	/* Add Consul token as header for security */
+	if (!ast_strlen_zero(global_config.token)) {
+		char token_header[300];
+		snprintf(token_header, sizeof(token_header), "X-Consul-Token: %s", global_config.token);
+		headers = safe_slist_append(headers, token_header);
+		if (!headers) {
+			ast_cli(a->fd, "Consul Live Status: Failed to create token header.\n");
+			curl_easy_cleanup(curl_handle);
+			return CLI_FAILURE;
+		}
+	}
 
 	curl_easy_setopt(curl_handle, CURLOPT_URL, ast_str_buffer(url));
 	curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
@@ -1253,10 +1342,16 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 {
 	CURL *curl;
 	CURLcode rcode;
-	const char *enable = astman_get_header(m,"Enable");
+	const char *enable = astman_get_header(m, "Enable");
 
 	if (ast_strlen_zero(enable)) {
 		astman_send_error(s, m, "No action to enable or disable specified");
+		return 0;
+	}
+
+	/* Validate that enable is either "true" or "false" */
+	if (strcasecmp(enable, "true") != 0 && strcasecmp(enable, "false") != 0) {
+		astman_send_error(s, m, "Enable parameter must be 'true' or 'false'");
 		return 0;
 	}
 
@@ -1271,11 +1366,15 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
 
 	if (rcode != CURLE_OK) {
 		ast_log(LOG_NOTICE, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rcode));
+		astman_send_error(s, m, "Failed to set maintenance mode in Consul");
+		curl_easy_cleanup(curl);
+		return 0;
 	}
 
+	astman_send_ack(s, m, "Maintenance mode updated");
 	curl_easy_cleanup(curl);
 
-	return RESULT_SUCCESS;
+	return 0;
 }
 
 /*!
@@ -1283,11 +1382,11 @@ static int manager_maintenance(struct mansession *s, const struct message *m)
  */
 static int load_module(void)
 {
-	// Configuration settings load first
+	/* Configuration settings load first */
 	load_config(0);
-	discover_ari_settings(); // Discover ARI settings after loading config
+	discover_ari_settings(); /* Discover ARI settings after loading config */
 
-	if (global_config.enabled != 1) { // Check enabled status after loading config
+	if (global_config.enabled != 1) { /* Check enabled status after loading config */
 		ast_log(LOG_NOTICE, "res_discovery_consul module is disabled in configuration.\n");
 		return AST_MODULE_LOAD_DECLINE;
 	}
@@ -1302,10 +1401,9 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	// Register our HTTP URI handler
-	ast_log(LOG_NOTICE, "Attempting to link HTTP URI handler for: %s\n", EID_CHECK_URI.uri);
-	ast_log(LOG_NOTICE, "  EID_CHECK_URI details before link: uri='%s', callback=%p\n", EID_CHECK_URI.uri, (void *)EID_CHECK_URI.callback);
-	if (ast_http_uri_link(&EID_CHECK_URI)) { // ast_http_uri_link returns 0 on success, non-zero on failure
+	/* Register our HTTP URI handler */
+	ast_debug(1, "Attempting to link HTTP URI handler for: %s\n", EID_CHECK_URI.uri);
+	if (ast_http_uri_link(&EID_CHECK_URI)) { /* ast_http_uri_link returns 0 on success, non-zero on failure */
 		ast_log(LOG_ERROR, "Failed to link Consul EID check HTTP URI handler\n");
 		ast_cli_unregister_multiple(cli_discovery, ARRAY_LEN(cli_discovery));
 		ast_manager_unregister("DiscoverySetMaintenance");
@@ -1315,7 +1413,7 @@ static int load_module(void)
 
 	if (load_res(1)) {
 		ast_log(LOG_WARNING, "Failed to register with Consul\n");
-		// Optionally, decide if this is fatal. For now, module load will continue.
+		/* Optionally, decide if this is fatal. For now, module load will continue. */
 	} else {
 		ast_log(LOG_NOTICE, "Successfully registered with Consul\n");
 	}
@@ -1372,7 +1470,8 @@ static int load_metadata_profile(struct ast_config *cfg)
 {
 	struct ast_variable *v;
 	char section_name[128];
-	
+	int found_any = 0;
+
 	/* Initialize metadata with defaults */
 	global_metadata.valid = 0;
 	ast_copy_string(global_metadata.profile_name, "", sizeof(global_metadata.profile_name));
@@ -1381,20 +1480,21 @@ static int load_metadata_profile(struct ast_config *cfg)
 	ast_copy_string(global_metadata.weight, "0", sizeof(global_metadata.weight));
 	ast_copy_string(global_metadata.max_calls, "0", sizeof(global_metadata.max_calls));
 	ast_copy_string(global_metadata.flags, "0", sizeof(global_metadata.flags));
-	
+
 	/* If no metadata profile specified, return success with defaults */
 	if (ast_strlen_zero(global_config.metadata_profile)) {
 		ast_debug(1, "No metadata profile specified, using defaults\n");
 		return 0;
 	}
-	
+
 	/* Construct section name: "metadata_" + profile_name */
 	snprintf(section_name, sizeof(section_name), "metadata_%s", global_config.metadata_profile);
-	
+
 	ast_debug(1, "Loading metadata profile from section [%s]\n", section_name);
-	
+
 	/* Parse metadata profile section */
 	for (v = ast_variable_browse(cfg, section_name); v; v = v->next) {
+		found_any = 1;
 		if (!strcasecmp(v->name, "group")) {
 			ast_copy_string(global_metadata.group, v->value, sizeof(global_metadata.group));
 			ast_debug(1, "Loaded group: %s\n", global_metadata.group);
@@ -1414,12 +1514,18 @@ static int load_metadata_profile(struct ast_config *cfg)
 			ast_log(LOG_WARNING, "Unknown option in metadata profile [%s]: %s\n", section_name, v->name);
 		}
 	}
-	
+
+	/* Check if section actually existed */
+	if (!found_any) {
+		ast_log(LOG_WARNING, "Metadata profile section [%s] not found in config\n", section_name);
+		return -1;
+	}
+
 	/* Mark profile as successfully loaded */
 	ast_copy_string(global_metadata.profile_name, global_config.metadata_profile, sizeof(global_metadata.profile_name));
 	global_metadata.valid = 1;
-	
+
 	ast_log(LOG_NOTICE, "Successfully loaded metadata profile '%s'\n", global_config.metadata_profile);
-	
+
 	return 0;
 }
